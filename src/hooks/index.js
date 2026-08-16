@@ -1,1 +1,1 @@
-// Controller hooks will be introduced in Phase 3.
+export { useGameController } from './useGameController.js';

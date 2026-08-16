@@ -1,1 +1,5 @@
-// Injected-randomness computer strategies will be introduced in Phase 2.
+export { BOT_CONTEXTS } from './constants.js';
+export { chooseComputerNumber } from './chooseNumber.js';
+export { chooseComputerRole } from './chooseRole.js';
+export { BOT_ERROR_CODES, BotError } from './errors.js';
+export { browserRandom } from './random.js';

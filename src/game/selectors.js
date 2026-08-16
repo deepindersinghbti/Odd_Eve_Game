@@ -16,6 +16,17 @@ export function getTarget(state) {
   return getCurrentInnings(state)?.target ?? null;
 }
 
+export function getChaseTarget(state) {
+  return (
+    getTarget(state) ??
+    (state.phase === PHASES.INNINGS_BREAK ? getFirstInningsScore(state) + 1 : null)
+  );
+}
+
+export function getNextBatter(state) {
+  return state.phase === PHASES.INNINGS_BREAK ? (state.innings[0]?.bowler ?? null) : null;
+}
+
 export function getRunsNeeded(state) {
   const target = getTarget(state);
   return target === null ? null : Math.max(target - getCurrentScore(state), 0);

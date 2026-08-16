@@ -1,0 +1,34 @@
+export const BOT_CONTEXTS = Object.freeze({
+  TOSS: 'TOSS',
+  COMPUTER_BATTING: 'COMPUTER_BATTING',
+  COMPUTER_BOWLING: 'COMPUTER_BOWLING',
+});
+
+export const BOT_NUMBER_COUNT = 6;
+export const MINIMUM_ADAPTIVE_HISTORY = 4;
+export const RECENT_HISTORY_LIMIT = 5;
+export const MINIMUM_TRANSITION_EVIDENCE = 2;
+export const LAPLACE_ALPHA = 1;
+export const HARD_PROBABILITY_FLOOR = 0.05;
+
+export const MEDIUM_BRANCH_WEIGHTS = Object.freeze({
+  UNIFORM: 0.65,
+  FREQUENCY: 0.35,
+});
+
+export const MEDIUM_BRANCHES = Object.freeze({
+  UNIFORM: 'UNIFORM',
+  FREQUENCY: 'FREQUENCY',
+});
+
+export const HARD_BRANCH_WEIGHTS = Object.freeze({
+  UNIFORM: 0.35,
+  GLOBAL: 0.3,
+  RECENT_TRANSITION: 0.35,
+});
+
+export const HARD_BRANCHES = Object.freeze({
+  UNIFORM: 'UNIFORM',
+  GLOBAL: 'GLOBAL',
+  RECENT_TRANSITION: 'RECENT_TRANSITION',
+});

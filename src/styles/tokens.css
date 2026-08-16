@@ -9,6 +9,8 @@
   --color-orange-400: #ff9d45;
   --color-lime-400: #b9f24c;
   --color-purple-400: #9f7aea;
+  --color-red-400: #ff6b72;
+  --color-mint-400: #62f0bd;
   --color-surface: #f8faff;
   --color-surface-muted: #e9efff;
   --color-ink: #12183b;
@@ -36,5 +38,6 @@
 
   --shadow-panel: 0 1.5rem 4rem rgb(2 7 29 / 35%);
   --shadow-glow: 0 0 2.5rem rgb(57 220 255 / 18%);
+  --shadow-button: 0 0.65rem 1.3rem rgb(7 13 42 / 24%);
   --focus-ring: 0 0 0 0.25rem rgb(57 220 255 / 45%);
 }
