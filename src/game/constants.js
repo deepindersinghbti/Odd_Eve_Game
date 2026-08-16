@@ -1,0 +1,60 @@
+export const PHASES = Object.freeze({
+  PARITY_SELECTION: 'PARITY_SELECTION',
+  TOSS_WAITING: 'TOSS_WAITING',
+  TOSS_REVEAL: 'TOSS_REVEAL',
+  ROLE_SELECTION: 'ROLE_SELECTION',
+  FIRST_INNINGS: 'FIRST_INNINGS',
+  INNINGS_BREAK: 'INNINGS_BREAK',
+  SECOND_INNINGS: 'SECOND_INNINGS',
+  MATCH_OVER: 'MATCH_OVER',
+});
+
+export const ACTIONS = Object.freeze({
+  SELECT_PARITY: 'SELECT_PARITY',
+  RESOLVE_TOSS: 'RESOLVE_TOSS',
+  ADVANCE_PRESENTATION: 'ADVANCE_PRESENTATION',
+  CHOOSE_FIRST_ROLE: 'CHOOSE_FIRST_ROLE',
+  RESOLVE_DELIVERY: 'RESOLVE_DELIVERY',
+  NEW_MATCH: 'NEW_MATCH',
+});
+
+export const DIFFICULTIES = Object.freeze({
+  EASY: 'EASY',
+  MEDIUM: 'MEDIUM',
+  HARD: 'HARD',
+});
+
+export const PARITIES = Object.freeze({
+  ODD: 'ODD',
+  EVEN: 'EVEN',
+});
+
+export const ROLES = Object.freeze({
+  BAT: 'BAT',
+  BOWL: 'BOWL',
+});
+
+export const PARTICIPANTS = Object.freeze({
+  PLAYER: 'PLAYER',
+  COMPUTER: 'COMPUTER',
+});
+
+export const INNINGS_STATUS = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  COMPLETE: 'COMPLETE',
+});
+
+export const OUTCOMES = Object.freeze({
+  PLAYER_WIN: 'PLAYER_WIN',
+  COMPUTER_WIN: 'COMPUTER_WIN',
+  DRAW: 'DRAW',
+});
+
+export const RESULT_REASONS = Object.freeze({
+  TARGET_REACHED: 'TARGET_REACHED',
+  DISMISSED_BELOW_TARGET: 'DISMISSED_BELOW_TARGET',
+  SCORES_LEVEL: 'SCORES_LEVEL',
+});
+
+export const INITIAL_ROUND_ID = 1;
+export const DEFAULT_PLAYER_NAME = 'Player';
