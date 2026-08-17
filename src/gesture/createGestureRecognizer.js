@@ -91,6 +91,8 @@ export function createGestureRecognizer({
   let active = false;
   let destroyed = false;
   let generation = 0;
+  let videoGeneration = 0;
+  let videoReady = Boolean(video);
 
   const publish = (changes) => {
     state = { ...state, ...changes };
@@ -104,9 +106,36 @@ export function createGestureRecognizer({
     runtime = null;
   };
   const cleanupCamera = () => {
+    videoGeneration += 1;
+    videoReady = false;
     stopCameraStream(stream);
     stream = null;
     detachCameraStream(video);
+  };
+  const rebindVideo = async (nextVideo) => {
+    if (video === nextVideo) return true;
+
+    const bindingGeneration = ++videoGeneration;
+    videoReady = false;
+    loop?.stop();
+    stabilityFilter.pause();
+    detachCameraStream(video);
+    video = nextVideo ?? null;
+
+    if (!video || !stream) return true;
+
+    try {
+      await attachCameraStream(video, stream);
+      if (destroyed || bindingGeneration !== videoGeneration || video !== nextVideo) {
+        return false;
+      }
+      videoReady = true;
+      if (active) loop?.start();
+      return true;
+    } catch (error) {
+      if (!destroyed && bindingGeneration === videoGeneration) fail(error);
+      return false;
+    }
   };
   const fail = (error) => {
     cleanupRuntime();
@@ -183,7 +212,16 @@ export function createGestureRecognizer({
           stream = null;
           return false;
         }
+        const attachGeneration = ++videoGeneration;
         await attachCameraStream(video, stream);
+        if (
+          destroyed ||
+          enableGeneration !== generation ||
+          attachGeneration !== videoGeneration
+        ) {
+          return false;
+        }
+        videoReady = true;
         publish({ cameraStatus: CAMERA_STATUS.GRANTED });
         runtime = runtimeLoader
           ? await runtimeLoader()
@@ -202,7 +240,7 @@ export function createGestureRecognizer({
         }
         loop = buildLoop();
         publish({ status: RECOGNIZER_STATUS.READY, error: null });
-        if (active) loop.start();
+        if (active && videoReady) loop.start();
         return true;
       } catch (error) {
         if (!destroyed && enableGeneration === generation) fail(error);
@@ -212,7 +250,7 @@ export function createGestureRecognizer({
     setActive(nextActive) {
       active = Boolean(nextActive);
       if (!loop) return;
-      if (active) loop.start();
+      if (active && videoReady) loop.start();
       else {
         loop.stop();
         stabilityFilter.pause();
@@ -244,6 +282,9 @@ export function createGestureRecognizer({
     },
     getState() {
       return state;
+    },
+    setVideo(nextVideo) {
+      return rebindVideo(nextVideo);
     },
   };
 }

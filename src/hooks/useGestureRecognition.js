@@ -31,7 +31,7 @@ function defaultRecognizerFactory(options) {
 }
 
 export function useGestureRecognition({
-  videoRef,
+  video,
   canSubmit,
   onSubmit,
   matchId,
@@ -68,11 +68,11 @@ export function useGestureRecognition({
   );
 
   const enableCamera = useCallback(async () => {
-    if (!videoRef.current) return false;
+    if (!video) return false;
     recognizerRef.current?.destroy();
     const canvas = globalThis.document.createElement('canvas');
     const recognizer = recognizerFactory({
-      video: videoRef.current,
+      video,
       canvas,
       onStateChange: setRecognizerState,
       isEligible: () => canSubmitRef.current,
@@ -81,7 +81,14 @@ export function useGestureRecognition({
     recognizerRef.current = recognizer;
     recognizer.setActive(canSubmitRef.current);
     return recognizer.enable();
-  }, [recognizerFactory, videoRef]);
+  }, [recognizerFactory, video]);
+
+  useEffect(() => {
+    // Toss, role-selection, and innings screens do not share a video element. Rebind
+    // the already-authorized camera instead of leaving recognition attached to the
+    // preview that React just unmounted.
+    recognizerRef.current?.setVideo?.(video);
+  }, [video]);
 
   useEffect(() => {
     recognizerRef.current?.setActive(method === INPUT_METHODS.CAMERA && canSubmit);

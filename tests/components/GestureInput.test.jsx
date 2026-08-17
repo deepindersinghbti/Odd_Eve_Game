@@ -37,6 +37,7 @@ function createFakeRecognizerFactory({ fail = false } = {}) {
       setActive: vi.fn((value) => {
         active = value;
       }),
+      setVideo: vi.fn(),
       enable: vi.fn(async () => {
         options.onStateChange(
           fail
@@ -136,6 +137,26 @@ describe('camera input React integration', () => {
     });
     expect(screen.queryByText(/Computer chose 4/i)).not.toBeInTheDocument();
     expect(harness.chooseNumber).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an enabled camera connected when play begins after the toss', async () => {
+    const harness = createHarness();
+    const fake = createFakeRecognizerFactory();
+    startAtToss(harness, fake.factory);
+    fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+    await act(async () => screen.getByRole('button', { name: /enable camera/i }).click());
+
+    act(() => fake.instances[0].submit(1));
+    act(() => resolvePending(harness.manual));
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    fireEvent.click(screen.getByRole('button', { name: /bat first/i }));
+
+    expect(fake.factory).toHaveBeenCalledOnce();
+    expect(fake.instances[0].setVideo).toHaveBeenLastCalledWith(
+      expect.any(HTMLVideoElement),
+    );
+    act(() => fake.instances[0].submit(4));
+    expect(harness.controller.getSnapshot().presentation.selectedPlayerNumber).toBe(4);
   });
 
   it('lets only the first input win a button/camera same-tick race', async () => {

@@ -1,4 +1,4 @@
-import { Component, useCallback, useRef, useState } from 'react';
+import { Component, useCallback, useState } from 'react';
 
 import AppShell from './components/AppShell.jsx';
 import { ErrorBanner } from './components/GameBits.jsx';
@@ -48,7 +48,9 @@ function GameApplication({ controller, storage, gestureRecognizerFactory }) {
   const [name, setName] = useState(preferences.playerName);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  const videoRef = useRef(null);
+  // Each input screen owns its preview element. Keep the current element in state so
+  // the recognizer can reattach its existing stream when the game swaps screens.
+  const [videoElement, setVideoElement] = useState(null);
   const state = useGameController({ controller, initialSetup: preferences });
 
   const persist = useCallback((next) => savePreferences(next, storage), [storage]);
@@ -83,7 +85,7 @@ function GameApplication({ controller, storage, gestureRecognizerFactory }) {
     [numberInputAvailable, state],
   );
   const gesture = useGestureRecognition({
-    videoRef,
+    video: videoElement,
     canSubmit: numberInputAvailable,
     onSubmit: submitGestureNumber,
     matchId: state.game?.matchId ?? null,
@@ -140,7 +142,7 @@ function GameApplication({ controller, storage, gestureRecognizerFactory }) {
             onChoose={state.submitTossNumber}
             onContinue={state.advancePresentation}
             gesture={gesture}
-            videoRef={videoRef}
+            videoRef={setVideoElement}
             inputEligible={numberInputAvailable}
           />
         );
@@ -165,7 +167,7 @@ function GameApplication({ controller, storage, gestureRecognizerFactory }) {
             onChoose={state.submitPlayNumber}
             onAdvance={state.advancePresentation}
             gesture={gesture}
-            videoRef={videoRef}
+            videoRef={setVideoElement}
             inputEligible={numberInputAvailable}
           />
         );

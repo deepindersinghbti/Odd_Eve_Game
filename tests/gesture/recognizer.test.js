@@ -117,6 +117,29 @@ describe('gesture recognizer orchestration', () => {
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
+  it('rebinds the active stream when React replaces the preview element', async () => {
+    const harness = createRecognizerHarness();
+    const nextVideo = {
+      videoWidth: 640,
+      videoHeight: 480,
+      play: vi.fn().mockResolvedValue(),
+      srcObject: null,
+    };
+    harness.recognizer.setActive(true);
+    await harness.recognizer.enable();
+
+    await harness.recognizer.setVideo(null);
+    expect(harness.video.srcObject).toBeNull();
+    expect(harness.track.stop).not.toHaveBeenCalled();
+    expect(harness.loops[0].stop).toHaveBeenCalledOnce();
+
+    await expect(harness.recognizer.setVideo(nextVideo)).resolves.toBe(true);
+    expect(nextVideo.srcObject).not.toBeNull();
+    expect(nextVideo.play).toHaveBeenCalledOnce();
+    expect(harness.loops[0].start).toHaveBeenCalledTimes(2);
+    expect(harness.track.stop).not.toHaveBeenCalled();
+  });
+
   it('offers a safe error state and releases the camera when model loading fails', async () => {
     const harness = createRecognizerHarness({
       runtimeLoader: vi.fn().mockRejectedValue(new Error('corrupt local model')),
