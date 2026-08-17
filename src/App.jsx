@@ -1,13 +1,14 @@
-import { Component, useCallback, useState } from 'react';
+import { Component, useCallback, useRef, useState } from 'react';
 
 import AppShell from './components/AppShell.jsx';
 import { ErrorBanner } from './components/GameBits.jsx';
 import GameHeader from './components/GameHeader.jsx';
 import NewMatchDialog from './components/NewMatchDialog.jsx';
 import RulesDialog from './components/RulesDialog.jsx';
-import { PRESENTATION_CONTEXT } from './controller/index.js';
+import GestureTrainingStudio from './components/gesture/GestureTrainingStudio.jsx';
+import { PRESENTATION_CONTEXT, PRESENTATION_STATUS } from './controller/index.js';
 import { PHASES } from './game/index.js';
-import { useGameController } from './hooks/index.js';
+import { useGameController, useGestureRecognition } from './hooks/index.js';
 import {
   HomeScreen,
   InningsBreakScreen,
@@ -42,11 +43,12 @@ class AppErrorBoundary extends Component {
   }
 }
 
-function GameApplication({ controller, storage }) {
+function GameApplication({ controller, storage, gestureRecognizerFactory }) {
   const [preferences] = useState(() => loadPreferences(storage));
   const [name, setName] = useState(preferences.playerName);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const videoRef = useRef(null);
   const state = useGameController({ controller, initialSetup: preferences });
 
   const persist = useCallback((next) => savePreferences(next, storage), [storage]);
@@ -61,9 +63,40 @@ function GameApplication({ controller, storage }) {
     persist({ difficulty: state.setup.difficulty, playerName });
     state.startMatch({ playerName });
   };
+  const numberInputAvailable = Boolean(
+    state.game &&
+    [PHASES.TOSS_WAITING, PHASES.FIRST_INNINGS, PHASES.SECOND_INNINGS].includes(
+      state.game.phase,
+    ) &&
+    state.presentation.status === PRESENTATION_STATUS.IDLE &&
+    !state.controls.locked,
+  );
+  const submitGestureNumber = useCallback(
+    (value) => {
+      if (!numberInputAvailable) return false;
+      const result =
+        state.game.phase === PHASES.TOSS_WAITING
+          ? state.submitTossNumber(value)
+          : state.submitPlayNumber(value);
+      return result.ok;
+    },
+    [numberInputAvailable, state],
+  );
+  const gesture = useGestureRecognition({
+    videoRef,
+    canSubmit: numberInputAvailable,
+    onSubmit: submitGestureNumber,
+    matchId: state.game?.matchId ?? null,
+    recognizerFactory: gestureRecognizerFactory,
+  });
   const returnToSetup = () => {
+    gesture.useButtons();
     state.newMatch({ returnToSetup: true });
     setResetOpen(false);
+  };
+  const playAgain = () => {
+    gesture.useButtons();
+    state.newMatch();
   };
 
   let screen;
@@ -106,6 +139,9 @@ function GameApplication({ controller, storage }) {
             locked={state.controls.locked}
             onChoose={state.submitTossNumber}
             onContinue={state.advancePresentation}
+            gesture={gesture}
+            videoRef={videoRef}
+            inputEligible={numberInputAvailable}
           />
         );
         break;
@@ -128,6 +164,9 @@ function GameApplication({ controller, storage }) {
             locked={state.controls.locked}
             onChoose={state.submitPlayNumber}
             onAdvance={state.advancePresentation}
+            gesture={gesture}
+            videoRef={videoRef}
+            inputEligible={numberInputAvailable}
           />
         );
         break;
@@ -140,7 +179,7 @@ function GameApplication({ controller, storage }) {
         screen = (
           <ResultScreen
             game={state.game}
-            onPlayAgain={state.newMatch}
+            onPlayAgain={playAgain}
             onChangeDifficulty={returnToSetup}
           />
         );
@@ -175,9 +214,18 @@ function GameApplication({ controller, storage }) {
 }
 
 export default function App(props) {
+  const showTrainingStudio =
+    import.meta.env.DEV &&
+    new URLSearchParams(globalThis.location.search).get('gesture-studio') === '1';
   return (
     <AppErrorBoundary>
-      <GameApplication {...props} />
+      {showTrainingStudio ? (
+        <AppShell>
+          <GestureTrainingStudio />
+        </AppShell>
+      ) : (
+        <GameApplication {...props} />
+      )}
     </AppErrorBoundary>
   );
 }

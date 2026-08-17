@@ -1,5 +1,5 @@
 import DifficultyPicker from '../components/DifficultyPicker.jsx';
-import NumberPad from '../components/NumberPad.jsx';
+import NumberInputControls from '../components/gesture/NumberInputControls.jsx';
 import {
   PlayerPanels,
   RecentDeliveries,
@@ -114,7 +114,16 @@ export function ParityScreen({ game, onChoose, onBack }) {
   );
 }
 
-export function TossScreen({ game, presentation, locked, onChoose, onContinue }) {
+export function TossScreen({
+  game,
+  presentation,
+  locked,
+  onChoose,
+  onContinue,
+  gesture,
+  videoRef,
+  inputEligible,
+}) {
   const revealing = presentation.status === PRESENTATION_STATUS.SHOWING_REVEAL;
   const thinking = presentation.status === PRESENTATION_STATUS.COMPUTER_THINKING;
   return (
@@ -133,10 +142,13 @@ export function TossScreen({ game, presentation, locked, onChoose, onContinue })
         <p className="screen-copy">Pick 1–6. Both choices are revealed together.</p>
       )}
       {!revealing && (
-        <NumberPad
+        <NumberInputControls
           disabled={locked}
           onChoose={onChoose}
           label="Choose your toss number"
+          gesture={gesture}
+          videoRef={videoRef}
+          eligible={inputEligible}
         />
       )}
       {thinking && (
@@ -223,7 +235,16 @@ export function RoleSelectionScreen({ game, presentation, onChoose, onContinue }
   );
 }
 
-export function MatchScreen({ game, presentation, locked, onChoose, onAdvance }) {
+export function MatchScreen({
+  game,
+  presentation,
+  locked,
+  onChoose,
+  onAdvance,
+  gesture,
+  videoRef,
+  inputEligible,
+}) {
   const innings = getCurrentInnings(game);
   const score = getCurrentScore(game);
   const target = getTarget(game);
@@ -266,10 +287,13 @@ export function MatchScreen({ game, presentation, locked, onChoose, onAdvance })
             </h2>
           )}
           {!reveal && (
-            <NumberPad
+            <NumberInputControls
               disabled={locked}
               onChoose={onChoose}
               label="Choose your delivery number"
+              gesture={gesture}
+              videoRef={videoRef}
+              eligible={inputEligible}
             />
           )}
           {thinking && (

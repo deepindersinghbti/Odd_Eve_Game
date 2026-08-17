@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "calibrated": false,
+  "sampleCounts": {
+    "NO_HAND": 0,
+    "ONE": 0,
+    "TWO": 0,
+    "THREE": 0,
+    "FOUR": 0,
+    "FIVE": 0,
+    "SIX": 0
+  },
+  "validation": null,
+  "notes": "Implementation placeholder only. Real multi-person calibration is pending."
+}

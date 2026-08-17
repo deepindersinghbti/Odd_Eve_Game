@@ -430,6 +430,236 @@ button:disabled {
   gap: 0.7rem;
   margin: 0.5rem auto;
 }
+.number-input-controls {
+  display: grid;
+  width: min(100%, 48rem);
+  justify-items: center;
+  gap: 0.45rem;
+}
+.input-method-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  overflow: hidden;
+  padding: 0.2rem;
+  border: 1px solid rgb(255 255 255/22%);
+  border-radius: 999px;
+  background: rgb(6 11 36/38%);
+}
+.surface-card .input-method-toggle {
+  border-color: #cbd4ec;
+  background: #e8edfa;
+}
+.input-method-toggle button {
+  min-height: 2.35rem;
+  padding: 0.4rem 0.9rem;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  font-weight: 850;
+}
+.surface-card .input-method-toggle button {
+  color: #596183;
+}
+.input-method-toggle button.is-selected {
+  color: #10173d;
+  background: var(--color-cyan-400);
+}
+.camera-panel {
+  display: grid;
+  width: min(100%, 42rem);
+  grid-template-columns: minmax(10rem, 13rem) minmax(12rem, 1fr);
+  align-items: center;
+  justify-items: center;
+  gap: 0.55rem 1rem;
+  padding: 0.75rem;
+  border: 1px solid #cbd4ec;
+  border-radius: 1rem;
+  color: var(--color-ink);
+  background: #f2f6ff;
+}
+.camera-panel__privacy {
+  grid-column: 1/-1;
+  margin: 0;
+  color: #566083;
+  font-size: 0.76rem;
+}
+.gesture-guide {
+  position: relative;
+  grid-row: span 3;
+  width: min(100%, 13rem);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 0.85rem;
+  background: #101637;
+}
+.gesture-guide--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.gesture-guide video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.gesture-guide__frame {
+  position: absolute;
+  inset: 0.7rem;
+  display: grid;
+  align-items: end;
+  border: 0.18rem dashed var(--color-lime-400);
+  border-radius: 0.65rem;
+  box-shadow: 0 0 0 100vmax rgb(5 10 30/18%);
+}
+.gesture-guide__frame span {
+  justify-self: center;
+  margin-bottom: 0.35rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  color: white;
+  background: rgb(5 10 30/78%);
+  font-size: 0.66rem;
+  font-weight: 850;
+}
+.gesture-candidate {
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+}
+.gesture-candidate p,
+.camera-state p,
+.camera-panel__paused,
+.camera-panel__six {
+  margin: 0;
+}
+.gesture-candidate__progress {
+  position: relative;
+  display: grid;
+  width: 4.8rem;
+  aspect-ratio: 1;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--color-blue-500) var(--hold-progress),
+    #d6deef var(--hold-progress)
+  );
+}
+.training-studio {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+.training-studio h1,
+.training-studio h2,
+.training-studio p {
+  margin-top: 0;
+}
+.training-studio__workspace {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  align-items: start;
+  gap: 1rem;
+  padding: 1rem;
+}
+.training-studio__workspace .gesture-guide {
+  grid-row: auto;
+  width: 100%;
+}
+.training-studio__controls,
+.training-studio__controls fieldset {
+  display: grid;
+  gap: 0.55rem;
+}
+.training-studio__controls fieldset {
+  grid-template-columns: repeat(2, minmax(9rem, 1fr));
+  border: 1px solid #cbd4ec;
+  border-radius: 0.8rem;
+}
+.training-studio__controls legend {
+  font-weight: 900;
+}
+.training-studio__controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.training-studio__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.training-studio__import {
+  position: relative;
+  cursor: pointer;
+}
+.training-studio__import input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.training-studio__validation {
+  padding: 1rem;
+}
+.training-studio__table-wrap {
+  overflow: auto;
+}
+.training-studio table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+.training-studio th,
+.training-studio td {
+  padding: 0.4rem;
+  border: 1px solid #cbd4ec;
+  text-align: center;
+}
+.gesture-candidate__progress::before {
+  position: absolute;
+  width: 3.9rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: white;
+  content: '';
+}
+.gesture-candidate__progress span {
+  z-index: 1;
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+}
+.camera-state {
+  display: grid;
+  gap: 0.25rem;
+  text-align: center;
+}
+.camera-state p {
+  color: #7b3340;
+  font-size: 0.82rem;
+}
+.gesture-key {
+  width: 100%;
+  font-size: 0.75rem;
+  text-align: left;
+}
+.gesture-key summary {
+  cursor: pointer;
+  font-weight: 850;
+}
+.gesture-key ul {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.2rem 0.6rem;
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+.camera-panel__six {
+  font-weight: 900;
+}
 .number-button {
   min-width: 0;
   aspect-ratio: 1;
@@ -684,6 +914,10 @@ button:disabled {
   gap: 0.45rem;
   margin: 0;
 }
+.match-workspace .camera-panel {
+  max-height: 14rem;
+  overflow: auto;
+}
 .match-workspace .number-button {
   border-color: transparent;
   border-radius: 0.8rem;
@@ -925,6 +1159,15 @@ button:disabled {
   }
   .number-pad {
     grid-template-columns: repeat(3, 1fr);
+  }
+  .camera-panel {
+    grid-template-columns: 1fr;
+  }
+  .training-studio__workspace {
+    grid-template-columns: 1fr;
+  }
+  .gesture-guide {
+    grid-row: auto;
   }
   .number-button {
     aspect-ratio: auto;

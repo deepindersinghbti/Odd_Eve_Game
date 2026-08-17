@@ -4,4 +4,5 @@ coverage/
 playwright-report/
 test-results/
 .npm-cache/
+public/assets/models/mobilenet/
 *.md

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "calibrated": false,
+  "featureExtractor": {
+    "name": "mobilenet-v1",
+    "version": 1,
+    "alpha": 0.25,
+    "inputSize": 224,
+    "embeddingSize": 256,
+    "embeddingLayer": "global_average_pooling2d_1",
+    "inputRange": [-1, 1]
+  },
+  "classes": {}
+}
