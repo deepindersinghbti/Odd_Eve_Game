@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../../src/App.jsx';
+import GestureCandidate from '../../src/components/gesture/GestureCandidate.jsx';
 import { CAMERA_STATUS, RECOGNIZER_STATUS } from '../../src/gesture/index.js';
 import { createHarness, resolvePending } from '../controller/helpers.js';
 
@@ -28,10 +29,21 @@ function startAtToss(harness, factory, wrapper) {
   fireEvent.click(screen.getByRole('button', { name: /^odd/i }));
 }
 
-function createFakeRecognizerFactory({ fail = false } = {}) {
+function createFakeRecognizerFactory({ fail = false, needsCalibration = false } = {}) {
   const instances = [];
   const factory = vi.fn((options) => {
     let active = false;
+    const readyState = {
+      status: RECOGNIZER_STATUS.READY,
+      cameraStatus: CAMERA_STATUS.GRANTED,
+      rawLabel: null,
+      confidence: 0,
+      candidateLabel: null,
+      holdProgress: 0,
+      cooldown: false,
+      error: null,
+      ...(needsCalibration ? { calibrationStatus: 'BACKGROUND_REQUIRED' } : {}),
+    };
     const instance = {
       options,
       setActive: vi.fn((value) => {
@@ -46,18 +58,23 @@ function createFakeRecognizerFactory({ fail = false } = {}) {
                 cameraStatus: CAMERA_STATUS.DENIED,
                 error: { code: 'DENIED', message: 'Permission denied. Use buttons.' },
               }
-            : {
-                status: RECOGNIZER_STATUS.READY,
-                cameraStatus: CAMERA_STATUS.GRANTED,
-                rawLabel: null,
-                confidence: 0,
-                candidateLabel: null,
-                holdProgress: 0,
-                cooldown: false,
-                error: null,
-              },
+            : readyState,
         );
         return !fail;
+      }),
+      calibrateBackground: vi.fn(async () => {
+        options.onStateChange({ ...readyState, calibrationStatus: 'PALM_REQUIRED' });
+        return true;
+      }),
+      calibratePalm: vi.fn(async () => {
+        options.onStateChange({ ...readyState, calibrationStatus: 'READY' });
+        return true;
+      }),
+      recalibrate: vi.fn(() => {
+        options.onStateChange({
+          ...readyState,
+          calibrationStatus: 'BACKGROUND_REQUIRED',
+        });
       }),
       destroy: vi.fn(),
       submit(value) {
@@ -71,15 +88,24 @@ function createFakeRecognizerFactory({ fail = false } = {}) {
 }
 
 describe('camera input React integration', () => {
-  it('exposes the training studio only through the explicit development query', () => {
-    globalThis.history.replaceState({}, '', '/?gesture-studio=1');
-    render(<App storage={storage()} />);
+  it('shows a low-confidence raw prediction instead of appearing idle', () => {
+    render(
+      <GestureCandidate
+        state={{
+          rawLabel: 'THREE',
+          candidateLabel: null,
+          confidence: 0.34,
+          holdProgress: 0,
+          cooldown: false,
+          lastSubmittedValue: null,
+        }}
+      />,
+    );
+
     expect(
-      screen.getByRole('heading', { name: /gesture calibration studio/i }),
+      screen.getByText(/I can see 3, but confidence is low/i, { selector: 'p' }),
     ).toBeVisible();
-    expect(
-      screen.getByRole('button', { name: /start camera and local model/i }),
-    ).toBeVisible();
+    expect(screen.getByText('Confidence: 34%')).toBeVisible();
   });
 
   it('defaults to Buttons without requesting camera permission', () => {
@@ -104,6 +130,30 @@ describe('camera input React integration', () => {
     expect(fake.factory).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /enable camera/i }));
     expect(fake.factory).toHaveBeenCalledOnce();
+  });
+
+  it('guides background and open-palm calibration before accepting gestures', async () => {
+    const harness = createHarness();
+    const fake = createFakeRecognizerFactory({ needsCalibration: true });
+    startAtToss(harness, fake.factory);
+    fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+    await act(async () => screen.getByRole('button', { name: /enable camera/i }).click());
+
+    expect(screen.getByText(/Step 1 of 2: empty background/i)).toBeVisible();
+    await act(async () =>
+      screen.getByRole('button', { name: /capture background/i }).click(),
+    );
+    expect(screen.getByText(/Step 2 of 2: open palm/i)).toBeVisible();
+    await act(async () =>
+      screen.getByRole('button', { name: /capture open palm/i }).click(),
+    );
+
+    expect(
+      screen.getByRole('progressbar', { name: /gesture hold progress/i }),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: /recalibrate/i })).toBeVisible();
+    expect(fake.instances[0].calibrateBackground).toHaveBeenCalledOnce();
+    expect(fake.instances[0].calibratePalm).toHaveBeenCalledOnce();
   });
 
   it('routes a camera toss through the same controller command and locks once', async () => {

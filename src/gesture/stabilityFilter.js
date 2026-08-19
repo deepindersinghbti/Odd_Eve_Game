@@ -76,13 +76,13 @@ export function createStabilityFilter(overrides = {}) {
       armed = true;
       return snapshot({ label, confidence, timestamp });
     }
-    if (
-      !GESTURE_LABEL_LIST.includes(label) ||
-      !Number.isFinite(confidence) ||
-      confidence < settings.minimumConfidence
-    ) {
+    if (!GESTURE_LABEL_LIST.includes(label) || !Number.isFinite(confidence)) {
       clearTracking();
       return snapshot({ timestamp });
+    }
+    if (confidence < settings.minimumConfidence) {
+      clearTracking();
+      return snapshot({ label, confidence, timestamp });
     }
     if (!armed || timestamp < cooldownUntil) {
       clearTracking();

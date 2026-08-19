@@ -227,6 +227,28 @@ button:disabled {
   font-size: clamp(1.45rem, 2.5vw, 2.15rem);
   font-weight: 900;
 }
+.foundation-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid rgb(185 242 76 / 32%);
+  border-radius: var(--radius-pill);
+  color: var(--color-text);
+  background: rgb(185 242 76 / 9%);
+  box-shadow: var(--shadow-glow);
+}
+.foundation-status span {
+  color: var(--color-lime-400);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.foundation-status strong {
+  font-size: 0.88rem;
+}
 .hero-copy {
   max-width: 38rem;
   margin: 0;
@@ -484,6 +506,29 @@ button:disabled {
   color: #566083;
   font-size: 0.76rem;
 }
+.camera-panel__positioning {
+  grid-column: 1/-1;
+  margin: 0;
+  color: #344160;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.calibration-wizard {
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+  text-align: center;
+}
+.calibration-wizard p {
+  max-width: 24rem;
+  margin: 0;
+  color: #566083;
+  font-size: 0.78rem;
+}
+.calibration-wizard progress {
+  width: min(100%, 14rem);
+  accent-color: var(--color-cyan-400);
+}
 .gesture-guide {
   position: relative;
   grid-row: span 3;
@@ -506,14 +551,15 @@ button:disabled {
   object-fit: cover;
   transform: scaleX(-1);
 }
+/* Position/size come from inline styles derived from GUIDE_BOX so the visible
+   frame always matches the pixels actually analyzed. */
 .gesture-guide__frame {
   position: absolute;
-  inset: 0.7rem;
   display: grid;
   align-items: end;
   border: 0.18rem dashed var(--color-lime-400);
   border-radius: 0.65rem;
-  box-shadow: 0 0 0 100vmax rgb(5 10 30/18%);
+  box-shadow: 0 0 0 100vmax rgb(5 10 30/45%);
 }
 .gesture-guide__frame span {
   justify-self: center;
@@ -535,6 +581,11 @@ button:disabled {
 .camera-panel__paused,
 .camera-panel__six {
   margin: 0;
+}
+.gesture-candidate__confidence {
+  color: #647096;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
 }
 .gesture-candidate__progress {
   position: relative;

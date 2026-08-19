@@ -1,4 +1,9 @@
-import { GESTURE_INSTRUCTIONS, RECOGNIZER_STATUS } from '../../gesture/index.js';
+import {
+  CALIBRATION_STATUS,
+  GESTURE_INSTRUCTIONS,
+  RECOGNIZER_STATUS,
+} from '../../gesture/index.js';
+import CalibrationWizard from './CalibrationWizard.jsx';
 import CameraPermissionState from './CameraPermissionState.jsx';
 import GestureCandidate from './GestureCandidate.jsx';
 import GestureGuide from './GestureGuide.jsx';
@@ -8,18 +13,27 @@ export default function CameraPanel({
   state,
   eligible,
   onEnable,
+  onCalibrateBackground,
+  onCalibratePalm,
+  onRecalibrate,
   onUseButtons,
 }) {
   const disabled = state.status === RECOGNIZER_STATUS.DISABLED;
   const loading = state.status === RECOGNIZER_STATUS.LOADING;
   const ready = state.status === RECOGNIZER_STATUS.READY;
   const failed = state.status === RECOGNIZER_STATUS.ERROR;
+  // Injected test/legacy recognizers without calibration state remain compatible.
+  const calibrated =
+    !state.calibrationStatus || state.calibrationStatus === CALIBRATION_STATUS.READY;
 
   return (
     <section className="camera-panel" aria-label="Camera gesture input">
       <p className="camera-panel__privacy">
         Camera frames are processed locally in this browser and are not uploaded or saved
         during gameplay.
+      </p>
+      <p className="camera-panel__positioning">
+        Palm forward · Wrist at bottom · Separate raised fingers · Plain background
       </p>
       <GestureGuide ref={videoRef} hidden={!ready || !eligible} />
       {disabled && (
@@ -30,7 +44,15 @@ export default function CameraPanel({
       {loading && (
         <CameraPermissionState cameraStatus={state.cameraStatus} error={state.error} />
       )}
-      {ready && eligible && <GestureCandidate state={state} />}
+      {ready && eligible && !calibrated && (
+        <CalibrationWizard
+          state={state}
+          onBackground={onCalibrateBackground}
+          onPalm={onCalibratePalm}
+          onRetry={onRecalibrate}
+        />
+      )}
+      {ready && eligible && calibrated && <GestureCandidate state={state} />}
       {ready && !eligible && (
         <p className="camera-panel__paused" role="status">
           Camera recognition is paused until the next number choice.
@@ -46,6 +68,15 @@ export default function CameraPanel({
           onClick={onUseButtons}
         >
           Use buttons instead
+        </button>
+      )}
+      {ready && calibrated && (
+        <button
+          className="button button--quiet-dark"
+          type="button"
+          onClick={onRecalibrate}
+        >
+          Recalibrate
         </button>
       )}
       <details className="gesture-key">

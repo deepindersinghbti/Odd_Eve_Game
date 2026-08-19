@@ -1,5 +1,32 @@
-import { MODEL_CONFIG } from './constants.js';
+import { GEOMETRIC_RECOGNITION_CONFIG, GUIDE_BOX } from './constants.js';
 
+// The guide box in SOURCE VIDEO pixel coordinates. Derived from the single
+// GUIDE_BOX definition so the analyzed crop and the on-screen overlay cannot
+// diverge. Clamped so the box always stays inside the frame even for unusual
+// aspect ratios.
+export function getGuideBoxCrop(video) {
+  const width = Number(video?.videoWidth) || 0;
+  const height = Number(video?.videoHeight) || 0;
+  if (width <= 0 || height <= 0) return null;
+
+  const shortEdge = Math.min(width, height);
+  const size = Math.max(1, Math.round(shortEdge * GUIDE_BOX.sizeRatio));
+  const maxX = width - size;
+  const maxY = height - size;
+  const sourceX = Math.min(
+    maxX,
+    Math.max(0, Math.round(width * GUIDE_BOX.centerXRatio - size / 2)),
+  );
+  const sourceY = Math.min(
+    maxY,
+    Math.max(0, Math.round(height * GUIDE_BOX.centerYRatio - size / 2)),
+  );
+
+  return { sourceX, sourceY, sourceSize: size };
+}
+
+// Retained for callers that need the legacy full-frame square (and so the
+// change in analyzed region is explicit rather than silent).
 export function getCenteredSquareCrop(video) {
   const width = Number(video?.videoWidth) || 0;
   const height = Number(video?.videoHeight) || 0;
@@ -15,9 +42,9 @@ export function getCenteredSquareCrop(video) {
 export function drawMirroredGuideCrop(
   video,
   canvas,
-  outputSize = MODEL_CONFIG.inputSize,
+  outputSize = GEOMETRIC_RECOGNITION_CONFIG.processingSize,
 ) {
-  const crop = getCenteredSquareCrop(video);
+  const crop = getGuideBoxCrop(video);
   const context = canvas?.getContext?.('2d', { willReadFrequently: true });
   if (!crop || !context) return false;
 
@@ -41,4 +68,11 @@ export function drawMirroredGuideCrop(
   );
   context.restore();
   return true;
+}
+
+export function readMirroredGuideFrame(video, canvas, outputSize) {
+  if (!drawMirroredGuideCrop(video, canvas, outputSize)) return null;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const image = context?.getImageData?.(0, 0, canvas.width, canvas.height);
+  return image?.data ? new Uint8ClampedArray(image.data) : null;
 }

@@ -5,4 +5,5 @@ playwright-report/
 test-results/
 .npm-cache/
 public/assets/models/mobilenet/
+public/assets/models/hand-cricket-gestures/
 *.md

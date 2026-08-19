@@ -1,4 +1,9 @@
-import { CAMERA_STATUS, MODEL_ASSET_PATHS, RECOGNIZER_STATUS } from './constants.js';
+import {
+  CALIBRATION_STATUS,
+  CAMERA_STATUS,
+  GEOMETRIC_RECOGNITION_CONFIG,
+  RECOGNIZER_STATUS,
+} from './constants.js';
 import {
   attachCameraStream,
   cameraStatusForError,
@@ -6,11 +11,10 @@ import {
   requestCameraStream,
   stopCameraStream,
 } from './camera.js';
-import { createGestureClassifier } from './classifier.js';
-import { drawMirroredGuideCrop } from './crop.js';
-import { deserializeClassifierDataset } from './datasetSerializer.js';
-import { GESTURE_ERROR_CODES, GestureError, toGestureError } from './errors.js';
-import { loadLocalFeatureExtractor } from './modelLoader.js';
+import { buildBackgroundReference, buildSkinCalibration } from './calibration.js';
+import { readMirroredGuideFrame } from './crop.js';
+import { GESTURE_ERROR_CODES, toGestureError } from './errors.js';
+import { createGeometricPipeline } from './geometricPipeline.js';
 import { createPredictionLoop } from './predictionLoop.js';
 import { createStabilityFilter } from './stabilityFilter.js';
 
@@ -25,46 +29,12 @@ const initialState = Object.freeze({
   cooldown: false,
   error: null,
   lastSubmittedValue: null,
+  calibrationStatus: CALIBRATION_STATUS.IDLE,
+  calibrationProgress: 0,
+  detectionState: null,
+  raisedFingerCount: null,
+  rejectionReason: null,
 });
-
-function disposeSafely(resource) {
-  try {
-    resource?.dispose?.();
-  } catch {
-    // Cleanup must not hide the primary error or prevent other resources releasing.
-  }
-}
-
-async function loadRuntime({ featureLoader, classifierLoader, fetcher, datasetUrl }) {
-  const featureExtractor = await featureLoader();
-  let classifier;
-  try {
-    classifier = await classifierLoader();
-    const response = await fetcher(datasetUrl, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Dataset request failed (${response.status}).`);
-    const document = await response.json();
-    if (document.calibrated === false) {
-      throw new GestureError(
-        GESTURE_ERROR_CODES.MODEL_NOT_CALIBRATED,
-        'Gesture model calibration is pending. Use buttons instead.',
-      );
-    }
-    const tensors = deserializeClassifierDataset(document, featureExtractor.tf, {
-      requireAllClasses: true,
-    });
-    classifier.replaceDataset(tensors);
-    return { featureExtractor, classifier };
-  } catch (error) {
-    disposeSafely(classifier);
-    disposeSafely(featureExtractor);
-    if (error instanceof GestureError) throw error;
-    throw toGestureError(
-      error,
-      GESTURE_ERROR_CODES.MODEL_LOAD_FAILED,
-      'The local gesture classifier could not be loaded. Use buttons instead.',
-    );
-  }
-}
 
 export function createGestureRecognizer({
   video,
@@ -74,36 +44,34 @@ export function createGestureRecognizer({
   isEligible = () => true,
   mediaDevices,
   clock = () => globalThis.performance.now(),
-  fetcher = (...args) => globalThis.fetch(...args),
-  featureLoader = loadLocalFeatureExtractor,
-  classifierLoader = createGestureClassifier,
-  runtimeLoader,
   loopFactory = createPredictionLoop,
   stabilityFilter = createStabilityFilter(),
-  datasetUrl = MODEL_ASSET_PATHS.dataset,
+  pipeline = createGeometricPipeline(),
+  frameReader = readMirroredGuideFrame,
+  wait = (delay) => new Promise((resolve) => globalThis.setTimeout(resolve, delay)),
+  calibrationFrameCount = GEOMETRIC_RECOGNITION_CONFIG.calibrationFrameCount,
+  calibrationFrameIntervalMs = GEOMETRIC_RECOGNITION_CONFIG.calibrationFrameIntervalMs,
   scheduler,
   visibilityTarget,
 } = {}) {
   let state = { ...initialState };
   let stream = null;
-  let runtime = null;
   let loop = null;
   let active = false;
   let destroyed = false;
   let generation = 0;
   let videoGeneration = 0;
   let videoReady = Boolean(video);
+  let calibrationGeneration = 0;
+  let backgroundReference = null;
 
   const publish = (changes) => {
     state = { ...state, ...changes };
     onStateChange(state);
   };
-  const cleanupRuntime = () => {
+  const cleanupLoop = () => {
     loop?.destroy();
     loop = null;
-    disposeSafely(runtime?.classifier);
-    disposeSafely(runtime?.featureExtractor);
-    runtime = null;
   };
   const cleanupCamera = () => {
     videoGeneration += 1;
@@ -138,11 +106,11 @@ export function createGestureRecognizer({
     }
   };
   const fail = (error) => {
-    cleanupRuntime();
+    cleanupLoop();
     cleanupCamera();
     const gestureError = toGestureError(
       error,
-      GESTURE_ERROR_CODES.MODEL_LOAD_FAILED,
+      GESTURE_ERROR_CODES.PROCESSING_FAILURE,
       'Gesture recognition failed. Use buttons instead.',
     );
     publish({
@@ -150,23 +118,46 @@ export function createGestureRecognizer({
       status: RECOGNIZER_STATUS.ERROR,
       cameraStatus: cameraStatusForError(gestureError),
       error: { code: gestureError.code, message: gestureError.message },
+      calibrationStatus: CALIBRATION_STATUS.ERROR,
     });
+  };
+
+  const readFrame = () =>
+    frameReader(video, canvas, GEOMETRIC_RECOGNITION_CONFIG.processingSize);
+
+  const captureFrames = async (status) => {
+    const captureGeneration = ++calibrationGeneration;
+    const frames = [];
+    loop?.stop();
+    stabilityFilter.pause();
+    for (let index = 0; index < calibrationFrameCount; index += 1) {
+      if (destroyed || captureGeneration !== calibrationGeneration) return null;
+      const frame = readFrame();
+      if (!frame) throw new Error('Wait for a visible camera frame and try again.');
+      frames.push(frame);
+      publish({
+        calibrationStatus: status,
+        calibrationProgress: (index + 1) / calibrationFrameCount,
+      });
+      if (index + 1 < calibrationFrameCount) await wait(calibrationFrameIntervalMs);
+    }
+    return frames;
+  };
+
+  const finishCalibrationCapture = () => {
+    if (active && videoReady) loop?.start();
   };
 
   const buildLoop = () =>
     loopFactory({
       scheduler,
       visibilityTarget,
-      async predict() {
-        if (!drawMirroredGuideCrop(video, canvas)) {
+      predict() {
+        const frame = readFrame();
+        if (!frame) {
           return { label: null, confidence: 0 };
         }
-        const embedding = runtime.featureExtractor.infer(canvas);
-        try {
-          return await runtime.classifier.predict(embedding);
-        } finally {
-          embedding.dispose();
-        }
+        return pipeline.analyze(frame);
       },
       onPrediction(prediction) {
         const filtered = stabilityFilter.push({
@@ -183,6 +174,9 @@ export function createGestureRecognizer({
           cooldown: filtered.cooldown,
           lastSubmittedValue:
             filtered.rawLabel === 'NO_HAND' ? null : state.lastSubmittedValue,
+          detectionState: prediction.state ?? null,
+          raisedFingerCount: prediction.raisedFingerCount ?? null,
+          rejectionReason: prediction.quality?.rejection ?? null,
         });
         if (filtered.submission !== null && active && isEligible()) {
           const accepted = onSubmit(filtered.submission, filtered.stableLabel);
@@ -198,8 +192,11 @@ export function createGestureRecognizer({
     async enable() {
       if (destroyed || state.status === RECOGNIZER_STATUS.LOADING) return false;
       const enableGeneration = ++generation;
-      cleanupRuntime();
+      cleanupLoop();
       cleanupCamera();
+      calibrationGeneration += 1;
+      backgroundReference = null;
+      pipeline.setCalibration(null);
       publish({
         ...initialState,
         status: RECOGNIZER_STATUS.LOADING,
@@ -223,23 +220,13 @@ export function createGestureRecognizer({
         }
         videoReady = true;
         publish({ cameraStatus: CAMERA_STATUS.GRANTED });
-        runtime = runtimeLoader
-          ? await runtimeLoader()
-          : await loadRuntime({
-              featureLoader,
-              classifierLoader,
-              fetcher,
-              datasetUrl,
-            });
-        if (destroyed || enableGeneration !== generation) {
-          disposeSafely(runtime?.classifier);
-          disposeSafely(runtime?.featureExtractor);
-          runtime = null;
-          cleanupCamera();
-          return false;
-        }
         loop = buildLoop();
-        publish({ status: RECOGNIZER_STATUS.READY, error: null });
+        publish({
+          status: RECOGNIZER_STATUS.READY,
+          error: null,
+          calibrationStatus: CALIBRATION_STATUS.BACKGROUND_REQUIRED,
+          calibrationProgress: 0,
+        });
         if (active && videoReady) loop.start();
         return true;
       } catch (error) {
@@ -265,18 +252,22 @@ export function createGestureRecognizer({
     },
     disable() {
       generation += 1;
+      calibrationGeneration += 1;
       active = false;
-      cleanupRuntime();
+      cleanupLoop();
       cleanupCamera();
       stabilityFilter.reset();
+      pipeline.setCalibration(null);
+      backgroundReference = null;
       if (!destroyed) publish({ ...initialState });
     },
     destroy() {
       if (destroyed) return;
       destroyed = true;
       generation += 1;
+      calibrationGeneration += 1;
       active = false;
-      cleanupRuntime();
+      cleanupLoop();
       cleanupCamera();
       stabilityFilter.reset();
     },
@@ -285,6 +276,86 @@ export function createGestureRecognizer({
     },
     setVideo(nextVideo) {
       return rebindVideo(nextVideo);
+    },
+    async calibrateBackground() {
+      if (destroyed || state.status !== RECOGNIZER_STATUS.READY) return false;
+      try {
+        const frames = await captureFrames(CALIBRATION_STATUS.CAPTURING_BACKGROUND);
+        if (!frames) return false;
+        backgroundReference = buildBackgroundReference(
+          frames,
+          GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+          GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+        );
+        publish({
+          calibrationStatus: CALIBRATION_STATUS.PALM_REQUIRED,
+          calibrationProgress: 0,
+        });
+        finishCalibrationCapture();
+        return true;
+      } catch (error) {
+        publish({
+          calibrationStatus: CALIBRATION_STATUS.ERROR,
+          calibrationProgress: 0,
+          error: {
+            code: GESTURE_ERROR_CODES.CALIBRATION_FAILED,
+            message: error.message,
+          },
+        });
+        finishCalibrationCapture();
+        return false;
+      }
+    },
+    async calibratePalm() {
+      if (destroyed || state.status !== RECOGNIZER_STATUS.READY || !backgroundReference) {
+        return false;
+      }
+      try {
+        const frames = await captureFrames(CALIBRATION_STATUS.CAPTURING_PALM);
+        if (!frames) return false;
+        const calibration = buildSkinCalibration(
+          frames,
+          backgroundReference,
+          GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+          GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+        );
+        pipeline.setCalibration(calibration);
+        stabilityFilter.reset({ requireRemoval: true });
+        publish({
+          calibrationStatus: CALIBRATION_STATUS.READY,
+          calibrationProgress: 1,
+          error: null,
+        });
+        finishCalibrationCapture();
+        return true;
+      } catch (error) {
+        publish({
+          calibrationStatus: CALIBRATION_STATUS.ERROR,
+          calibrationProgress: 0,
+          error: {
+            code: GESTURE_ERROR_CODES.CALIBRATION_FAILED,
+            message: error.message,
+          },
+        });
+        finishCalibrationCapture();
+        return false;
+      }
+    },
+    recalibrate() {
+      calibrationGeneration += 1;
+      backgroundReference = null;
+      pipeline.setCalibration(null);
+      stabilityFilter.reset();
+      publish({
+        calibrationStatus: CALIBRATION_STATUS.BACKGROUND_REQUIRED,
+        calibrationProgress: 0,
+        error: null,
+        rawLabel: null,
+        confidence: 0,
+        candidateLabel: null,
+        stableLabel: null,
+        holdProgress: 0,
+      });
     },
   };
 }

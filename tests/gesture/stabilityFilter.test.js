@@ -23,11 +23,24 @@ describe('gesture stability filter', () => {
   it('resets on a low-confidence frame', () => {
     const filter = createStabilityFilter();
     feed(filter, Array(7).fill(GESTURE_LABELS.TWO));
-    const reset = filter.push(prediction(GESTURE_LABELS.TWO, 700, 0.84));
-    expect(reset).toMatchObject({ candidateLabel: null, holdProgress: 0 });
+    const reset = filter.push(prediction(GESTURE_LABELS.TWO, 700, 0.65));
+    expect(reset).toMatchObject({
+      rawLabel: GESTURE_LABELS.TWO,
+      confidence: 0.65,
+      candidateLabel: null,
+      holdProgress: 0,
+    });
     expect(
       feed(filter, Array(3).fill(GESTURE_LABELS.TWO), 100, 800).at(-1).submission,
     ).toBeNull();
+  });
+
+  it('rejects geometric decisions below the frame confidence threshold', () => {
+    const filter = createStabilityFilter();
+    const results = Array.from({ length: 10 }, (_, index) =>
+      filter.push(prediction(GESTURE_LABELS.THREE, index * 100, 2 / 3)),
+    );
+    expect(results.at(-1).submission).toBeNull();
   });
 
   it('accepts exactly 8 of 10 agreement after the hold time', () => {

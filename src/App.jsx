@@ -5,7 +5,6 @@ import { ErrorBanner } from './components/GameBits.jsx';
 import GameHeader from './components/GameHeader.jsx';
 import NewMatchDialog from './components/NewMatchDialog.jsx';
 import RulesDialog from './components/RulesDialog.jsx';
-import GestureTrainingStudio from './components/gesture/GestureTrainingStudio.jsx';
 import { PRESENTATION_CONTEXT, PRESENTATION_STATUS } from './controller/index.js';
 import { PHASES } from './game/index.js';
 import { useGameController, useGestureRecognition } from './hooks/index.js';
@@ -216,18 +215,9 @@ function GameApplication({ controller, storage, gestureRecognizerFactory }) {
 }
 
 export default function App(props) {
-  const showTrainingStudio =
-    import.meta.env.DEV &&
-    new URLSearchParams(globalThis.location.search).get('gesture-studio') === '1';
   return (
     <AppErrorBoundary>
-      {showTrainingStudio ? (
-        <AppShell>
-          <GestureTrainingStudio />
-        </AppShell>
-      ) : (
-        <GameApplication {...props} />
-      )}
+      <GameApplication {...props} />
     </AppErrorBoundary>
   );
 }

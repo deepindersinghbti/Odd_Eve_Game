@@ -18,6 +18,10 @@ const disabledState = {
   cooldown: false,
   error: null,
   lastSubmittedValue: null,
+  calibrationStatus: null,
+  calibrationProgress: 0,
+  detectionState: null,
+  raisedFingerCount: null,
 };
 
 function defaultRecognizerFactory(options) {
@@ -104,10 +108,23 @@ export function useGestureRecognition({
 
   useEffect(() => () => recognizerRef.current?.destroy(), []);
 
+  const calibrateBackground = useCallback(
+    () => recognizerRef.current?.calibrateBackground?.() ?? false,
+    [],
+  );
+  const calibratePalm = useCallback(
+    () => recognizerRef.current?.calibratePalm?.() ?? false,
+    [],
+  );
+  const recalibrate = useCallback(() => recognizerRef.current?.recalibrate?.(), []);
+
   return {
     method,
     selectMethod,
     enableCamera,
+    calibrateBackground,
+    calibratePalm,
+    recalibrate,
     useButtons: switchToButtons,
     state: recognizerState,
   };

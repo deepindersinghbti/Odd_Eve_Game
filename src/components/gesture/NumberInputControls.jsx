@@ -20,6 +20,9 @@ export default function NumberInputControls({
           state={gesture.state}
           eligible={eligible}
           onEnable={gesture.enableCamera}
+          onCalibrateBackground={gesture.calibrateBackground}
+          onCalibratePalm={gesture.calibratePalm}
+          onRecalibrate={gesture.recalibrate}
           onUseButtons={gesture.useButtons}
         />
       )}
