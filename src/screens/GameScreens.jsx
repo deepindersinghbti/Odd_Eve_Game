@@ -41,6 +41,10 @@ export function HomeScreen({
         <p className="eyebrow">University Exhibition Edition</p>
         <h1 id="game-title">HAND CRICKET</h1>
         <p className="hero-subtitle">You vs Computer</p>
+        <div className="foundation-status" role="status">
+          <span aria-hidden="true">Phase 0</span>
+          <strong>Game setup coming next</strong>
+        </div>
         <p className="hero-copy">
           Pick a number. Match the computer’s number to take a wicket—or avoid the match
           to score runs.

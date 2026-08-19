@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CALIBRATION_STATUS,
   CAMERA_STATUS,
   GESTURE_LABELS,
   RECOGNIZER_STATUS,
@@ -15,6 +16,7 @@ function createVideoAndCanvas() {
     translate: vi.fn(),
     scale: vi.fn(),
     drawImage: vi.fn(),
+    getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(256 * 256 * 4) })),
     restore: vi.fn(),
   };
   return {
@@ -28,16 +30,21 @@ function createVideoAndCanvas() {
   };
 }
 
-function createRecognizerHarness(overrides = {}) {
+function createRecognizerHarness() {
   const { video, canvas } = createVideoAndCanvas();
   const track = { stop: vi.fn() };
   const stream = { getTracks: () => [track] };
   const getUserMedia = vi.fn().mockResolvedValue(stream);
-  const featureExtractor = {
-    infer: vi.fn(() => ({ dispose: vi.fn() })),
-    dispose: vi.fn(),
+  const pipeline = {
+    analyze: vi.fn(() => ({
+      label: GESTURE_LABELS.NO_HAND,
+      confidence: 1,
+      state: 'NO_HAND',
+    })),
+    setCalibration: vi.fn(),
   };
-  const classifier = { predict: vi.fn(), dispose: vi.fn() };
+  let frame = new Uint8ClampedArray(256 * 256 * 4);
+  const frameReader = vi.fn(() => frame);
   const loops = [];
   const loopFactory = vi.fn((options) => {
     const loop = {
@@ -57,9 +64,10 @@ function createRecognizerHarness(overrides = {}) {
     video,
     canvas,
     mediaDevices: { getUserMedia },
-    runtimeLoader:
-      overrides.runtimeLoader ??
-      vi.fn().mockResolvedValue({ featureExtractor, classifier }),
+    pipeline,
+    frameReader,
+    wait: vi.fn().mockResolvedValue(),
+    calibrationFrameCount: 3,
     loopFactory,
     clock: () => now,
     isEligible: () => eligible,
@@ -71,8 +79,8 @@ function createRecognizerHarness(overrides = {}) {
     video,
     track,
     getUserMedia,
-    featureExtractor,
-    classifier,
+    pipeline,
+    frameReader,
     loops,
     onSubmit,
     states,
@@ -81,6 +89,9 @@ function createRecognizerHarness(overrides = {}) {
     },
     setEligible(value) {
       eligible = value;
+    },
+    setFrame(nextFrame) {
+      frame = nextFrame;
     },
   };
 }
@@ -105,13 +116,13 @@ describe('gesture recognizer orchestration', () => {
     expect(harness.loops[0].start).toHaveBeenCalledOnce();
   });
 
-  it('releases tracks and model tensors on disable and destroy', async () => {
+  it('releases tracks and the processing loop on disable and destroy', async () => {
     const harness = createRecognizerHarness();
     await harness.recognizer.enable();
     harness.recognizer.disable();
     expect(harness.track.stop).toHaveBeenCalledOnce();
-    expect(harness.featureExtractor.dispose).toHaveBeenCalledOnce();
-    expect(harness.classifier.dispose).toHaveBeenCalledOnce();
+    expect(harness.loops[0].destroy).toHaveBeenCalledOnce();
+    expect(harness.pipeline.setCalibration).toHaveBeenLastCalledWith(null);
     expect(harness.video.srcObject).toBeNull();
     harness.recognizer.destroy();
     expect(harness.track.stop).toHaveBeenCalledOnce();
@@ -140,11 +151,11 @@ describe('gesture recognizer orchestration', () => {
     expect(harness.track.stop).not.toHaveBeenCalled();
   });
 
-  it('offers a safe error state and releases the camera when model loading fails', async () => {
-    const harness = createRecognizerHarness({
-      runtimeLoader: vi.fn().mockRejectedValue(new Error('corrupt local model')),
-    });
-    await expect(harness.recognizer.enable()).resolves.toBe(false);
+  it('offers a safe error state and releases the camera when frame analysis fails', async () => {
+    const harness = createRecognizerHarness();
+    await harness.recognizer.enable();
+    const processingError = new Error('pixel processing failed');
+    harness.loops[0].options.onError(processingError);
     expect(harness.recognizer.getState()).toMatchObject({
       status: RECOGNIZER_STATUS.ERROR,
       cameraStatus: CAMERA_STATUS.ERROR,
@@ -189,18 +200,44 @@ describe('gesture recognizer orchestration', () => {
     expect(harness.onSubmit).not.toHaveBeenCalled();
   });
 
-  it('disposes the embedding after every prediction', async () => {
+  it('passes every captured frame to the geometric pipeline', async () => {
     const harness = createRecognizerHarness();
-    const dispose = vi.fn();
-    harness.featureExtractor.infer.mockReturnValue({ dispose });
-    harness.classifier.predict.mockResolvedValue({
-      label: GESTURE_LABELS.NO_HAND,
-      confidence: 1,
-    });
     await harness.recognizer.enable();
     for (let index = 0; index < 50; index += 1) {
       await harness.loops[0].options.predict();
     }
-    expect(dispose).toHaveBeenCalledTimes(50);
+    expect(harness.frameReader).toHaveBeenCalledTimes(50);
+    expect(harness.pipeline.analyze).toHaveBeenCalledTimes(50);
+  });
+
+  it('calibrates empty background before the open palm and keeps only numeric parameters', async () => {
+    const harness = createRecognizerHarness();
+    const solidFrame = (red, green, blue) => {
+      const frame = new Uint8ClampedArray(256 * 256 * 4);
+      for (let offset = 0; offset < frame.length; offset += 4) {
+        frame[offset] = red;
+        frame[offset + 1] = green;
+        frame[offset + 2] = blue;
+        frame[offset + 3] = 255;
+      }
+      return frame;
+    };
+    await harness.recognizer.enable();
+    expect(harness.recognizer.getState().calibrationStatus).toBe(
+      CALIBRATION_STATUS.BACKGROUND_REQUIRED,
+    );
+    harness.setFrame(solidFrame(25, 50, 100));
+    await expect(harness.recognizer.calibrateBackground()).resolves.toBe(true);
+    expect(harness.recognizer.getState().calibrationStatus).toBe(
+      CALIBRATION_STATUS.PALM_REQUIRED,
+    );
+    harness.setFrame(solidFrame(190, 125, 88));
+    await expect(harness.recognizer.calibratePalm()).resolves.toBe(true);
+    expect(harness.recognizer.getState().calibrationStatus).toBe(
+      CALIBRATION_STATUS.READY,
+    );
+    expect(harness.pipeline.setCalibration).toHaveBeenLastCalledWith(
+      expect.objectContaining({ width: 256, height: 256 }),
+    );
   });
 });

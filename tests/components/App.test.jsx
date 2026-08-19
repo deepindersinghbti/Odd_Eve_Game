@@ -34,6 +34,8 @@ describe('Phase 4 application', () => {
     render(<App controller={harness.controller} storage={storage} />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'HAND CRICKET' })).toBeVisible();
+    expect(screen.getByText('You vs Computer')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('Game setup coming next');
     expect(screen.getByRole('radio', { name: /medium/i })).toBeChecked();
     fireEvent.click(screen.getByRole('radio', { name: /hard/i }));
     fireEvent.change(screen.getByLabelText(/your name/i), {

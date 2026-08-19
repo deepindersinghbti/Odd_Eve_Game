@@ -1,69 +1,87 @@
 import { expect, test } from '@playwright/test';
 
-async function installFakeGestureAdapter(page) {
-  await page.addInitScript(() => {
-    window.__HAND_CRICKET_GESTURE_TEST_FACTORY__ = (options) => {
-      let active = false;
-      let armed = true;
-      let submissions = 0;
-      const baseState = {
-        status: 'READY',
-        cameraStatus: 'GRANTED',
-        rawLabel: null,
-        confidence: 0,
-        stableLabel: null,
-        candidateLabel: null,
-        holdProgress: 0,
-        cooldown: false,
-        error: null,
-        lastSubmittedValue: null,
-      };
-      window.__gestureTest = {
-        feedStable(value) {
-          if (!active || !armed) return false;
-          for (let frame = 1; frame <= 10; frame += 1) {
+async function installFakeGestureAdapter(page, { needsCalibration = false } = {}) {
+  await page.addInitScript(
+    ({ calibrationRequired }) => {
+      window.__HAND_CRICKET_GESTURE_TEST_FACTORY__ = (options) => {
+        let active = false;
+        let armed = true;
+        let submissions = 0;
+        const baseState = {
+          status: 'READY',
+          cameraStatus: 'GRANTED',
+          calibrationStatus: calibrationRequired ? 'BACKGROUND_REQUIRED' : 'READY',
+          rawLabel: null,
+          confidence: 0,
+          stableLabel: null,
+          candidateLabel: null,
+          holdProgress: 0,
+          cooldown: false,
+          error: null,
+          lastSubmittedValue: null,
+        };
+        window.__gestureTest = {
+          feedStable(value) {
+            if (!active || !armed) return false;
+            for (let frame = 1; frame <= 10; frame += 1) {
+              options.onStateChange({
+                ...baseState,
+                rawLabel: String(value),
+                candidateLabel: String(value),
+                confidence: 0.95,
+                holdProgress: frame / 10,
+              });
+            }
+            const accepted = options.onSubmit(value, String(value));
+            if (accepted !== false) {
+              submissions += 1;
+              armed = false;
+              options.onStateChange({
+                ...baseState,
+                cooldown: true,
+                lastSubmittedValue: value,
+              });
+            }
+            return accepted;
+          },
+          removeHand() {
+            armed = true;
+            options.onStateChange({ ...baseState, rawLabel: 'NO_HAND' });
+          },
+          get submissions() {
+            return submissions;
+          },
+        };
+        return {
+          enable() {
+            options.onStateChange(baseState);
+            return Promise.resolve(true);
+          },
+          setActive(value) {
+            active = value;
+          },
+          calibrateBackground() {
+            options.onStateChange({ ...baseState, calibrationStatus: 'PALM_REQUIRED' });
+            return Promise.resolve(true);
+          },
+          calibratePalm() {
+            options.onStateChange({ ...baseState, calibrationStatus: 'READY' });
+            return Promise.resolve(true);
+          },
+          recalibrate() {
             options.onStateChange({
               ...baseState,
-              rawLabel: String(value),
-              candidateLabel: String(value),
-              confidence: 0.95,
-              holdProgress: frame / 10,
+              calibrationStatus: 'BACKGROUND_REQUIRED',
             });
-          }
-          const accepted = options.onSubmit(value, String(value));
-          if (accepted !== false) {
-            submissions += 1;
-            armed = false;
-            options.onStateChange({
-              ...baseState,
-              cooldown: true,
-              lastSubmittedValue: value,
-            });
-          }
-          return accepted;
-        },
-        removeHand() {
-          armed = true;
-          options.onStateChange({ ...baseState, rawLabel: 'NO_HAND' });
-        },
-        get submissions() {
-          return submissions;
-        },
+          },
+          destroy() {
+            active = false;
+          },
+        };
       };
-      return {
-        enable() {
-          options.onStateChange(baseState);
-          return Promise.resolve(true);
-        },
-        setActive(value) {
-          active = value;
-        },
-        destroy() {
-          active = false;
-        },
-      };
-    };
-  });
+    },
+    { calibrationRequired: needsCalibration },
+  );
 }
 
 test('camera adapter submits once, requires removal, and returns to buttons offline', async ({
@@ -81,6 +99,7 @@ test('camera adapter submits once, requires removal, and returns to buttons offl
   await page.getByRole('button', { name: /^odd/i }).click();
   await page.getByRole('button', { name: 'Camera' }).click();
   await expect(page.getByText(/processed locally/i)).toBeVisible();
+  await expect(page.getByText(/wrist at bottom/i)).toBeVisible();
   await page.getByRole('button', { name: /enable camera/i }).click();
 
   await page.evaluate(() => window.__gestureTest.feedStable(3));
@@ -96,61 +115,23 @@ test('camera adapter submits once, requires removal, and returns to buttons offl
   expect(externalRequests).toEqual([]);
 });
 
-test('every bundled MobileNet asset is available locally in production', async ({
+test('camera mode completes background and palm calibration before play', async ({
   page,
 }) => {
-  const externalRequests = [];
-  page.on('request', (request) => {
-    const hostname = new URL(request.url()).hostname;
-    if (!['127.0.0.1', 'localhost'].includes(hostname))
-      externalRequests.push(request.url());
-  });
-  await page.goto('/');
-  const assetResult = await page.evaluate(async () => {
-    const modelResponse = await fetch('/assets/models/mobilenet/model.json');
-    const model = await modelResponse.json();
-    const paths = model.weightsManifest.flatMap((group) => group.paths);
-    const responses = await Promise.all(
-      paths.map((path) => fetch(`/assets/models/mobilenet/${path}`)),
-    );
-    return {
-      modelOk: modelResponse.ok,
-      shardCount: paths.length,
-      allShardsOk: responses.every((response) => response.ok),
-    };
-  });
-  expect(assetResult).toEqual({
-    modelOk: true,
-    shardCount: 55,
-    allShardsOk: true,
-  });
-  expect(externalRequests).toEqual([]);
-});
-
-test('real TensorFlow loader stays local and reports pending calibration', async ({
-  page,
-}) => {
-  const externalRequests = [];
-  const modelRequests = [];
-  page.on('request', (request) => {
-    const url = new URL(request.url());
-    if (!['127.0.0.1', 'localhost'].includes(url.hostname)) {
-      externalRequests.push(request.url());
-    }
-    if (url.pathname.startsWith('/assets/models/mobilenet/')) {
-      modelRequests.push(url.pathname);
-    }
-  });
+  await installFakeGestureAdapter(page, { needsCalibration: true });
   await page.goto('/');
   await page.getByRole('button', { name: /start game/i }).click();
   await page.getByRole('button', { name: /^odd/i }).click();
   await page.getByRole('button', { name: 'Camera' }).click();
   await page.getByRole('button', { name: /enable camera/i }).click();
 
-  await expect(page.getByText(/calibration is pending/i)).toBeVisible({
-    timeout: 20_000,
-  });
-  expect(modelRequests).toContain('/assets/models/mobilenet/model.json');
-  expect(modelRequests).toHaveLength(56);
-  expect(externalRequests).toEqual([]);
+  await expect(page.getByText(/Step 1 of 2: empty background/i)).toBeVisible();
+  await page.getByRole('button', { name: /capture background/i }).click();
+  await expect(page.getByText(/Step 2 of 2: open palm/i)).toBeVisible();
+  await page.getByRole('button', { name: /capture open palm/i }).click();
+
+  await expect(
+    page.getByRole('progressbar', { name: /gesture hold progress/i }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: /recalibrate/i })).toBeVisible();
 });
