@@ -14,7 +14,7 @@ export default function NumberInputControls({
   return (
     <div className="number-input-controls">
       <InputMethodToggle value={gesture.method} onChange={gesture.selectMethod} />
-      {gesture.method === INPUT_METHODS.CAMERA && (
+      {gesture.method === INPUT_METHODS.CAMERA ? (
         <CameraPanel
           videoRef={videoRef}
           state={gesture.state}
@@ -25,8 +25,7 @@ export default function NumberInputControls({
           onRecalibrate={gesture.recalibrate}
           onUseButtons={gesture.useButtons}
         />
-      )}
-      {gesture.method !== INPUT_METHODS.CAMERA && (
+      ) : (
         <NumberPad disabled={disabled} onChoose={onChoose} label={label} />
       )}
     </div>

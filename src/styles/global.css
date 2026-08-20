@@ -2,8 +2,8 @@
 *::before,
 *::after {
   box-sizing: border-box;
-html 
-{
+}
+html {
   min-width: 20rem;
   background: #000000;
 }
@@ -89,7 +89,7 @@ button:disabled {
   bottom: -26%;
   background: radial-gradient(circle, #8c0f1c 0%, transparent 70%);
   animation-delay: -4s;
-}imation-delay: -4s;
+}
 
 .game-header {
   display: flex;
@@ -1297,7 +1297,7 @@ button:disabled {
     text-shadow:
       0.04em 0.04em 0 #2563eb,
       0.08em 0.08em 0 rgb(9 13 36/85%);
-  }   
+  }
   .hero-subtitle {
     margin-top: 1rem;
   }

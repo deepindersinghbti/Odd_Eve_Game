@@ -87,10 +87,14 @@ export function useGestureRecognition({
   const canSubmitRef = useRef(canSubmit);
   const onSubmitRef = useRef(onSubmit);
   const previousMatchIdRef = useRef(matchId);
+  const methodRef = useRef(method);
   useEffect(() => {
     canSubmitRef.current = canSubmit;
     onSubmitRef.current = onSubmit;
   }, [canSubmit, onSubmit]);
+  useEffect(() => {
+    methodRef.current = method;
+  }, [method]);
 
   const destroyRecognizer = useCallback(() => {
     recognizerRef.current?.destroy();
@@ -120,7 +124,14 @@ export function useGestureRecognition({
       canvas,
       onStateChange: setRecognizerState,
       isEligible: () => canSubmitRef.current,
-      onSubmit: (value, label) => onSubmitRef.current(value, label),
+      // The camera may only submit while camera mode is the selected input.
+      // The recognizer already stops itself on destroy(), but keeping the check
+      // here makes it an invariant of the hook that owns `method` rather than an
+      // emergent property of teardown ordering.
+      onSubmit: (value, label) => {
+        if (methodRef.current !== INPUT_METHODS.CAMERA) return false;
+        return onSubmitRef.current(value, label);
+      },
     });
     recognizerRef.current = recognizer;
     recognizer.setActive(canSubmitRef.current);

@@ -209,18 +209,24 @@ describe('camera input React integration', () => {
     expect(harness.controller.getSnapshot().presentation.selectedPlayerNumber).toBe(4);
   });
 
-  it('lets only the first input win a button/camera same-tick race', async () => {
+  // Camera and buttons are mutually exclusive inputs, so the old same-tick race is
+  // unreachable through the UI. The race that survives is a stale recognizer
+  // callback arriving after the player has already switched back to buttons.
+  it('ignores stale camera input after switching back to buttons', async () => {
     const harness = createHarness();
     const fake = createFakeRecognizerFactory();
     startAtToss(harness, fake.factory);
     fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
     await act(async () => screen.getByRole('button', { name: /enable camera/i }).click());
-    act(() => {
-      fake.instances[0].submit(3);
-      screen.getByRole('button', { name: 'Choose number 4' }).click();
-    });
+    expect(screen.queryByRole('button', { name: 'Choose number 4' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /use buttons instead/i }));
+    expect(screen.getByRole('button', { name: 'Choose number 4' })).toBeInTheDocument();
+
+    act(() => fake.instances[0].submit(3));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose number 4' }));
     expect(harness.chooseNumber).toHaveBeenCalledOnce();
-    expect(harness.controller.getSnapshot().presentation.selectedPlayerNumber).toBe(3);
+    expect(harness.controller.getSnapshot().presentation.selectedPlayerNumber).toBe(4);
   });
 
   it('destroys recognition and releases ownership on New Match', async () => {
