@@ -26,7 +26,9 @@ export default function NumberInputControls({
           onUseButtons={gesture.useButtons}
         />
       )}
-      <NumberPad disabled={disabled} onChoose={onChoose} label={label} />
+      {gesture.method !== INPUT_METHODS.CAMERA && (
+        <NumberPad disabled={disabled} onChoose={onChoose} label={label} />
+      )}
     </div>
   );
 }
