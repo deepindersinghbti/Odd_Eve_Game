@@ -8,10 +8,13 @@ off the device.
 
 Camera mode requires two short captures:
 
-1. **Empty background:** 16 frames are combined with a trimmed per-pixel mean.
-2. **Open palm:** central foreground pixels are converted to YCbCr. Median Cb/Cr and
-   median absolute deviation define adaptive chroma tolerances. The foreground
-   threshold is derived from the lower fifth of observed palm/background differences.
+1. **Empty background:** 16 frames are combined with a trimmed per-pixel mean, then
+   converted to YCbCr once and stored. The background never changes during a session,
+   so converting it here instead of per pixel per frame removes the pipeline's largest
+   per-frame cost.
+2. **Open palm:** palm pixels are selected with exactly the same drift-corrected
+   foreground test used during play, then stored in the background capture's colour
+   space. Median Cb/Cr and median absolute deviation define adaptive chroma tolerances.
 
 Only numeric calibration parameters remain in memory. Raw frames are not uploaded,
 saved, logged, or placed in React state.
@@ -32,23 +35,35 @@ afterwards -- they are the same colour.
 
 The 256×256 mirrored guide crop is processed at roughly 10 frames per second:
 
-1. Require calibrated YCbCr skin membership (widened by a published skin gamut used
-   only as a union fallback, never alone), plus **exposure-invariant** foreground
-   evidence: chroma distance from the background, or a luminance ratio measured after
-   dividing out the frame's median luminance shift. Consumer webcams re-run auto
-   exposure constantly -- and a hand entering the frame is itself enough to trigger it
-   -- so a raw RGB difference against a background snapshot lights up the whole ROI or
-   none of it as soon as the camera re-exposes.
+1. Divide out the camera's measured **per-channel gains**, then require calibrated
+   YCbCr skin membership (widened by a published skin gamut used only as a union
+   fallback, never alone), plus foreground evidence: chroma distance from the
+   background, or a luminance ratio. Consumer webcams re-run auto exposure and auto
+   white balance constantly -- and a hand entering the frame is itself enough to
+   trigger both -- so comparing raw pixels to a background snapshot lights up the whole
+   ROI or none of it the moment the camera re-tunes.
+
+   The gains are modelled multiplicatively in RGB rather than as a chroma offset,
+   because a channel gain shifts a pixel's chroma **in proportion to that pixel's own
+   value**. One additive offset therefore cannot correct a dark background and bright
+   skin at the same time. Because the YCbCr transform is linear, the correction folds
+   into the conversion coefficients and costs nothing per pixel.
 2. Apply a conservative 3×3 opening and closing.
 3. Label **all** 8-connected components, then select the most hand-like plausible one
    (`handPresence.js`). Selection is structural, not by area:
-   - the blob must reach the bottom band of the guide box (wrist/forearm entering from
-     below) -- a face floats free of every edge, which is the primary face rejector;
+   - the blob must enter from below, which is the primary face rejector. That is
+     satisfied either by running off the bottom edge (bare forearm) or by ending in a
+     flat, locally straight cut just above it (a sleeve cuff). A face floats clear of
+     the edge and ends in a rounded chin, satisfying neither;
    - a near-solid, box-filling blob is rejected as too regular to be a hand;
    - a blob much wider than tall is rejected.
    Two similarly sized plausible blobs (a face and a hand both in view) mark the frame
    ambiguous and halve confidence rather than guessing.
-4. Find the palm centre at the maximum of a two-pass chamfer distance transform.
+4. Find the palm centre at the maximum of a two-pass chamfer distance transform. Pixels
+   outside the ROI count as unknown rather than background, so a hand running off the
+   guide box is not pinched at the edge -- otherwise an identical hand reports a smaller
+   palm radius purely for sitting lower in the frame, and palm radius is the normaliser
+   for every finger-length measurement.
 5. Suppress the wrist region below the palm.
 6. Build and smooth a 240-bin radial silhouette signature.
 7. Find every raw local maximum of that signature (deliberately over-generates:
@@ -72,6 +87,82 @@ documented with units and rationale. Zero accepted protrusions maps to game valu
 when a plausible, sufficiently compact hand component and palm are present. An absent or
 invalid component is `NO_HAND`; contradictory evidence is `LOW_CONFIDENCE` and cannot
 submit.
+
+## Capturing a real misread (development only)
+
+Every fix in this subsystem so far was driven by synthetic fixtures, which means
+each one only tested a failure that had already been imagined. The
+one-finger-as-three bug survived four such fixtures because none of them modelled
+a hand close to the camera.
+
+In a development build the recognizer retains the last few frames alongside the
+pipeline's own reasoning, reachable from the browser console:
+
+```text
+__HAND_CRICKET_GESTURE_DEBUG__.last()      // latest frame + reasoning
+__HAND_CRICKET_GESTURE_DEBUG__.fixture()   // serialisable JSON record
+__HAND_CRICKET_GESTURE_DEBUG__.download()  // save it (explicit action only)
+__HAND_CRICKET_GESTURE_DEBUG__.clear()     // drop retained frames
+```
+
+A downloaded fixture replays through `fixtureToFrame()` to reproduce the exact
+misread as a deterministic test, so a fix can be driven by what the camera
+actually saw rather than by a silhouette someone guessed at.
+
+Frames live in a small in-memory ring buffer and nowhere else. Nothing is written
+to disk, storage, or the network unless a developer explicitly calls `download()`.
+Production builds contain none of this: the recognizer defaults to an inert
+recorder that the capture module is never imported for, and the bundle is
+asserted to contain no trace of the capture or export code.
+
+## Diagnosed failure: white balance drift made the hand disappear
+
+Calibrating under one white balance and playing under another made the hand vanish
+entirely -- `NO_HAND`, not a wrong count. Auto white balance scales the red and blue
+channels against green, which moves chroma; since both the skin test and the foreground
+test are chroma-based, a warm shift pushed skin outside the calibrated ellipse *and*
+past the fallback gamut's `cr` ceiling of 180 (measured `cr` reached 184 at R x1.20).
+Compensating exposure alone could not help, because the shift is not uniform across
+channels.
+
+The first attempt -- an additive chroma offset measured from the background -- fixed the
+background but left bright skin about 22 chroma units off, still outside the ellipse. A
+channel gain shifts chroma in proportion to the pixel's own channel value, so a single
+additive offset cannot correct a dark background and bright skin simultaneously. The
+working model estimates a **per-channel gain** (the median ratio of frame to calibrated
+background, clamped to plausible camera movement) and divides it back out, which inverts
+the camera's actual transformation at every brightness.
+
+Calibration performs the same correction and stores its skin model in the background
+capture's colour space, so the model is built from the same population it is later
+applied to. Previously calibration selected palm pixels by raw RGB difference while
+inference used drift-corrected evidence -- two different definitions of "foreground"
+that could drift apart independently.
+
+Folding the gains into the YCbCr coefficients removed the per-pixel object allocation
+the old conversion helper caused (~130k objects per frame), making the whole pipeline
+**2.7x faster** (10.5 ms to 3.9 ms per frame at 256x256) while adding the correction.
+
+Residual limit: once a channel saturates at 255 its true value is unrecoverable and no
+correction brings it back. The pipeline fails closed (`NO_HAND`) rather than reporting a
+wrong count.
+
+## Diagnosed failure: long sleeves made the game unplayable
+
+The first version of the wrist-entry rule required the hand blob to touch the bottom
+band of the guide box. That holds only for a **bare** forearm. With a long sleeve the
+forearm is not skin-coloured, so the skin blob ends at the cuff and floats free of every
+edge -- structurally identical to a face. The identical gesture went from `FINGERS`/2 to
+`NO_HAND`/`NO_WRIST_ENTRY` purely by covering the arm, and the failure was closed
+(unplayable) rather than degraded.
+
+Entry from below is now satisfied two ways: the blob runs off the bottom edge, **or** it
+ends near the bottom in a flat cut. The discriminator against a face is the *shape of the
+terminating edge*, not merely its position: a blob that was cut off keeps its width right
+to its lowest row, while a blob that ends naturally in a rounded cap -- a chin, or a fist
+held clear of the frame edge -- narrows sharply. Both halves are load-bearing, and both
+are tested: a face lowered far enough to pass the position check is still rejected by the
+taper, and a flat-bottomed object floating high is rejected by position.
 
 ## Diagnosed failure: one raised finger counted as two or three
 
@@ -144,7 +235,13 @@ peaks can exceed the true count while the validated, clustered result does not.
 - Required agreement: 8 of 10
 - Minimum continuous hold: 700 ms
 - Cooldown: 1200 ms
-- Hand removal required before rearming
+- Hand removal required before rearming: **3 consecutive confirmed-empty frames**, not
+  one. Segmentation drops the blob occasionally, and a single glitch frame while the
+  player still holds a gesture would re-arm and then auto-submit that same held gesture
+  on the next ball without them choosing it. Only a definitively empty box counts:
+  "a skin blob is present but is not hand-shaped" is a judgement call carrying lower
+  confidence, and breaks the streak rather than extending it. Failing closed costs the
+  player a moment's wait; failing open submits a number they did not pick.
 
 ## Operating constraints
 

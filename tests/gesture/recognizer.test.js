@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CALIBRATION_STATUS,
   CAMERA_STATUS,
+  DEFAULT_STABILITY_SETTINGS,
   GESTURE_LABELS,
   RECOGNIZER_STATUS,
   createGestureRecognizer,
@@ -180,8 +181,19 @@ describe('gesture recognizer orchestration', () => {
       onPrediction({ label: GESTURE_LABELS.FOUR, confidence: 0.95 });
     }
     expect(harness.onSubmit).toHaveBeenCalledOnce();
+    // One empty frame is not confirmed removal, so the prompt stays up.
     harness.setNow(3000);
     onPrediction({ label: GESTURE_LABELS.NO_HAND, confidence: 0.95 });
+    expect(harness.recognizer.getState().lastSubmittedValue).toBe(4);
+    // Sustained removal clears it.
+    for (
+      let index = 1;
+      index < DEFAULT_STABILITY_SETTINGS.requiredRemovalFrames;
+      index += 1
+    ) {
+      harness.setNow(3000 + index * 100);
+      onPrediction({ label: GESTURE_LABELS.NO_HAND, confidence: 0.95 });
+    }
     expect(harness.recognizer.getState().lastSubmittedValue).toBeNull();
   });
 

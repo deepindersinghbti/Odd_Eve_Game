@@ -71,7 +71,33 @@ export const DEFAULT_STABILITY_SETTINGS = Object.freeze({
   minimumHoldMs: 700,
   cooldownMs: 1200,
   predictionIntervalMs: 100,
+  // Consecutive confirmed-empty frames required before the filter re-arms for
+  // the next ball. A SINGLE frame is not enough: segmentation drops the blob
+  // occasionally, and one such glitch while the player is still holding a
+  // gesture would re-arm and then auto-submit that same held gesture on the
+  // next ball without them choosing it. At ~10fps this is ~300ms of absence.
+  requiredRemovalFrames: 3,
+  // Minimum confidence a NO_HAND frame must carry to count toward removal.
+  // Set above the ambiguous tier so that "a skin blob is present but does not
+  // look like a hand" never counts as the player having removed their hand.
+  minimumRemovalConfidence: 0.9,
 });
+
+// NO_HAND is not one situation. An empty guide box is a certain observation;
+// "a skin blob is there but failed a shape or position test" is a judgement
+// call that may well be a hand the geometry mis-read. Only the former may
+// confirm removal, so the two carry different confidence.
+export const NO_HAND_CONFIDENCE = Object.freeze({
+  empty: 1,
+  ambiguous: 0.5,
+});
+
+// Rejection reasons that mean the guide box is genuinely empty. Everything
+// else means something IS in the box, so the hand cannot be assumed gone.
+export const DEFINITIVE_NO_HAND_REASONS = Object.freeze([
+  'NO_COMPONENT',
+  'AREA_TOO_SMALL',
+]);
 
 export const GEOMETRIC_RECOGNITION_CONFIG = Object.freeze({
   processingSize: 256,
@@ -98,23 +124,20 @@ export const GUIDE_BOX = Object.freeze({
   centerYRatio: 0.62,
 });
 
-// Segmentation thresholds. Foreground evidence is deliberately built from
-// EXPOSURE-INVARIANT quantities: consumer webcams continuously re-run auto
-// exposure and auto white balance, and a hand entering the frame is itself a
-// large enough scene change to trigger that. A raw per-pixel RGB difference
-// against a background snapshot (the previous approach) therefore either lights
-// up the whole ROI or none of it as soon as the camera re-exposes -- which is
-// exactly the "a real hand reports NO_HAND" failure.
+// Segmentation thresholds. Every pixel is first divided by the camera's
+// measured per-channel gains (see foreground.js), so these thresholds apply to
+// values already back in the colour space the calibration was taken in.
+// Consumer webcams continuously re-run auto exposure and auto white balance,
+// and a hand entering the frame is itself a large enough scene change to
+// trigger both. Comparing raw pixels to a background snapshot -- the original
+// approach -- therefore lit up the whole ROI or none of it the moment the
+// camera re-tuned, which was the "a real hand reports NO_HAND" failure.
 export const SEGMENTATION_CONFIG = Object.freeze({
-  // Minimum chroma (Cb/Cr) distance from the calibrated background chroma for a
-  // pixel to count as foreground. Chroma barely moves under exposure changes,
-  // so this stays meaningful when luminance does not.
+  // Minimum chroma (Cb/Cr) distance from the calibrated background chroma for
+  // a gain-corrected pixel to count as foreground.
   minimumChromaDifference: 8,
-  // Minimum |Y/Ybackground - 1| for a pixel to count as foreground on
-  // brightness alone, measured AFTER subtracting the ROI's median luminance
-  // ratio. A global exposure shift moves every pixel's ratio by the same
-  // amount, so removing the median cancels it out and leaves genuine local
-  // changes (a hand) standing proud.
+  // Minimum |Y/Ybackground - 1| for a gain-corrected pixel to count as
+  // foreground on brightness alone.
   minimumLuminanceRatio: 0.22,
   // Squared-radius cutoff for the calibrated YCbCr skin ellipse.
   skinEllipseCutoff: 2.4,
@@ -131,6 +154,70 @@ export const SEGMENTATION_CONFIG = Object.freeze({
   }),
   minimumLuminance: 18,
   maximumLuminance: 248,
+  // Bounds on the per-channel gain the drift estimator will believe. Real
+  // auto-exposure and auto-white-balance movement is limited; a larger apparent
+  // gain means the SCENE changed, not the camera -- most obviously when an
+  // object covers nearly the whole ROI, where "everything moved" and "the
+  // camera re-tuned" are mathematically indistinguishable. Clamping keeps that
+  // case from dividing away the very difference the pipeline needs to see.
+  minimumLuminanceShift: 0.4,
+  maximumLuminanceShift: 2.5,
+});
+
+// Confidence scoring. Every submission passes through these numbers twice --
+// once at the pipeline's own floor, once at the stability filter's -- which
+// made them the highest-leverage constants in the system while they sat
+// inline and undocumented in geometricPipeline.js.
+export const CONFIDENCE_CONFIG = Object.freeze({
+  // Weights of the evidence terms. They sum to 1; each term is already
+  // normalised to [0, 1] before weighting.
+  weights: Object.freeze({
+    mask: 0.2, // how cleanly the blob dominates the foreground
+    palm: 0.2, // palm radius within a plausible band
+    fingers: 0.32, // per-fingertip length and prominence margins
+    border: 0.08, // how much of the blob is clipped by the guide box
+    clusters: 0.12, // how ambiguous the candidate set was
+    stability: 0.08, // frame-to-frame palm agreement
+  }),
+  // Minimum confidence for the pipeline to emit a countable label at all.
+  // Below this the frame becomes LOW_CONFIDENCE and cannot submit.
+  minimumReportable: 0.55,
+  // maskQuality ramps from 0 to 1 as the chosen blob's share of all
+  // foreground rises across this band.
+  maskShareFloor: 0.65,
+  maskShareRange: 0.35,
+  // Palm radius, as a fraction of the ROI's short edge, that counts as fully
+  // plausible; outside the band confidence falls off over `palmRadiusFalloff`.
+  palmRadiusMin: 0.06,
+  palmRadiusMax: 0.26,
+  palmRadiusFalloff: 0.05,
+  // Fraction of the ROI's short edge worth of clipped edge pixels that drives
+  // border quality to zero.
+  borderClipRange: 0.5,
+  // A closed fist is judged by how solidly it fills its bounding box.
+  fistFillFloor: 0.32,
+  fistFillRange: 0.35,
+  // Per-fingertip evidence: normalized length is scored across this band, and
+  // length and prominence are blended in this ratio.
+  fingerLengthFloor: 0.5,
+  fingerLengthRange: 0.9,
+  fingerLengthWeight: 0.6,
+  fingerProminenceWeight: 0.4,
+  // Ambiguity: how many surplus clusters, and how many last-stage duplicate
+  // rejections, drive the cluster term to its floor, and how far it can fall.
+  clusterSurplusRange: 3,
+  duplicateRejectionRange: 2,
+  clusterPenalty: 0.7,
+  // Frame-to-frame palm movement, as a fraction of palm radius, that drives
+  // the stability term to zero.
+  centreShiftRange: 0.6,
+  radiusShiftRange: 0.5,
+  // Multiplier applied when two similarly sized blobs competed to be the hand
+  // (classically a face and a hand both in the box).
+  ambiguousPresencePenalty: 0.5,
+  // A fist must fill at least this much of its bounding box to be believable
+  // as a fist rather than a failed segmentation.
+  minimumFistFillRatio: 0.38,
 });
 
 // Hand-presence gates, all as fractions of the guide box so they are
@@ -141,15 +228,36 @@ export const HAND_PRESENCE_CONFIG = Object.freeze({
   // these bounds discriminating rather than nearly-always-true.
   minimumAreaRatio: 0.045,
   maximumAreaRatio: 0.72,
-  // A hand reaches INTO the guide box from below, so its blob must touch the
-  // bottom edge (wrist/forearm). A face, a background object, or a stray blob
-  // floats free of that edge. This is the primary face rejector and encodes an
-  // operating assumption the project already documents but never enforced.
+  // A hand reaches INTO the guide box from below; a face, a background object,
+  // or a stray blob floats free. This is the primary face rejector and encodes
+  // an operating assumption the project documents but never enforced.
+  //
+  // "Entering from below" is satisfied two ways, because a BARE forearm and a
+  // SLEEVED one look completely different to a skin-colour segmenter:
+  //   (a) the blob touches the bottom band of the guide box -- bare forearm;
+  //   (b) the blob stops short of the bottom but ends in a flat, locally
+  //       straight cut -- a sleeve cuff.
+  // Requiring only (a) makes the game unplayable for anyone in long sleeves,
+  // since their skin blob ends at the cuff and floats exactly like a face.
   requireWristEntry: true,
-  // Fraction of the bottom edge that must be covered to count as wrist entry.
-  // Low enough to accept a narrow wrist, high enough to ignore a single-pixel
-  // artifact clipping the edge.
+  // (a) Fraction of the bottom edge that must be covered to count as bare-arm
+  // entry. Low enough to accept a narrow wrist, high enough to ignore a
+  // single-pixel artifact clipping the edge.
   minimumBottomEdgeRatio: 0.04,
+  // (b) How far above the ROI bottom a blob may end and still be read as a
+  // sleeve cuff, as a fraction of ROI height. A cuff sits just above the frame
+  // edge; a floating face leaves much more room beneath it.
+  maximumBottomGapRatio: 0.18,
+  // (b) Height of each of the two stacked sample bands used to judge whether
+  // the blob's lowest edge is a flat cut, as a fraction of ROI height. Kept
+  // small so it measures the shape of the terminating edge itself rather than
+  // the palm-to-wrist taper further up.
+  cuffSampleRatio: 0.03,
+  // (b) Minimum ratio of mean width across the lowest band to the band just
+  // above it. A cut-off sleeve keeps its width right to the edge (~1.0); a
+  // rounded cap -- a chin, a fist held clear of the frame edge -- narrows
+  // sharply and falls well below this.
+  minimumCuffFlatness: 0.7,
   // Contact with the other three edges is allowed but penalized, rather than
   // being an instant rejection: clipping one fingertip on the top edge should
   // lower confidence, not silently drop the whole frame to NO_HAND.

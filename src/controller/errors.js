@@ -8,6 +8,10 @@ export const CONTROLLER_ERROR_CODES = Object.freeze({
   INVALID_DELAY_CONFIG: 'INVALID_DELAY_CONFIG',
   INVALID_DEPENDENCY: 'INVALID_DEPENDENCY',
   MATCH_NOT_STARTED: 'MATCH_NOT_STARTED',
+  // Raised only for surfacing: an unexpected error inside a scheduled callback
+  // still propagates, but the player is told what happened and the controls
+  // are released rather than left locked.
+  UNEXPECTED_FAILURE: 'UNEXPECTED_FAILURE',
 });
 
 export class ControllerError extends Error {

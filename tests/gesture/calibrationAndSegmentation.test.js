@@ -163,3 +163,80 @@ describe('adaptive segmentation and geometric composition', () => {
     }
   });
 });
+
+describe('camera drift compensation', () => {
+  const width = 128;
+  const height = 128;
+  const BACKGROUND = [35, 70, 135];
+  const SKIN = [190, 125, 88];
+
+  // Applies independent per-channel gains, which is what a camera actually
+  // does: auto exposure moves all three together, auto white balance moves red
+  // and blue against green.
+  const applyGains = (colour, [gainRed, gainGreen, gainBlue]) => [
+    Math.min(255, Math.round(colour[0] * gainRed)),
+    Math.min(255, Math.round(colour[1] * gainGreen)),
+    Math.min(255, Math.round(colour[2] * gainBlue)),
+  ];
+
+  function twoFingerFrame(gains = [1, 1, 1]) {
+    const frame = solidFrame(width, height, applyGains(BACKGROUND, gains));
+    const skin = applyGains(SKIN, gains);
+    paintRectangle(frame, width, 38, 58, 54, 48, skin); // palm
+    paintRectangle(frame, width, 55, 98, 20, 30, skin); // wrist to bottom edge
+    paintRectangle(frame, width, 53, 17, 8, 45, skin); // finger
+    paintRectangle(frame, width, 64, 14, 8, 48, skin); // finger
+    return frame;
+  }
+
+  const calibration = buildSkinCalibration(
+    Array.from({ length: 5 }, () => twoFingerFrame()),
+    buildBackgroundReference(
+      Array.from({ length: 5 }, () => solidFrame(width, height, BACKGROUND)),
+      width,
+      height,
+    ),
+    width,
+    height,
+  );
+
+  it('calibration exposes no thresholds it does not itself consume', () => {
+    // These three were computed and frozen into the calibration but never read
+    // by any consumer, which made the calibration contract misleading.
+    expect(calibration).not.toHaveProperty('foregroundThreshold');
+    expect(calibration).not.toHaveProperty('minimumLuminance');
+    expect(calibration).not.toHaveProperty('maximumLuminance');
+    // The background is pre-converted once instead of per pixel per frame.
+    expect(calibration.backgroundYCbCr).toBeInstanceOf(Float32Array);
+    expect(calibration.backgroundYCbCr).toHaveLength(width * height * 3);
+  });
+
+  it.each([
+    ['neutral', [1, 1, 1]],
+    ['warm white balance', [1.12, 1, 0.88]],
+    ['very warm white balance', [1.2, 1, 0.8]],
+    ['cool white balance', [0.88, 1, 1.12]],
+    ['brighter exposure', [1.3, 1.3, 1.3]],
+    ['dimmer exposure', [0.7, 0.7, 0.7]],
+    ['exposure plus warm balance', [1.34, 1.2, 1.06]],
+  ])('REGRESSION still counts two fingers under %s drift', (_label, gains) => {
+    // White balance shifts chroma, and BOTH the skin test and the foreground
+    // test are chroma-based -- uncompensated, a warm shift pushed skin outside
+    // the calibrated ellipse and the hand vanished entirely as NO_HAND.
+    const result = createGeometricPipeline({ calibration }).analyze(
+      twoFingerFrame(gains),
+    );
+    expect(result.state).toBe('FINGERS');
+    expect(result.raisedFingerCount).toBe(2);
+  });
+
+  it('does not mistake a scene-wide colour change for camera drift', () => {
+    // A gain estimate is only meaningful while the background dominates the
+    // frame. Filling the ROI entirely with skin makes "the camera re-tuned"
+    // and "everything changed" indistinguishable, so the estimate is clamped
+    // rather than believed -- otherwise it would divide away the whole signal.
+    const flooded = solidFrame(width, height, SKIN);
+    const result = createGeometricPipeline({ calibration }).analyze(flooded);
+    expect(result.state).not.toBe('FINGERS');
+  });
+});

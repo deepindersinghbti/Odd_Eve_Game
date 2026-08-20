@@ -1,4 +1,9 @@
-import { GESTURE_LABELS } from './constants.js';
+import {
+  CONFIDENCE_CONFIG,
+  DEFINITIVE_NO_HAND_REASONS,
+  GESTURE_LABELS,
+  NO_HAND_CONFIDENCE,
+} from './constants.js';
 import { analyzeHandGeometry } from './fingerGeometry.js';
 import { analyzeHandPresence } from './segmentation.js';
 
@@ -16,13 +21,21 @@ function clamp(value) {
 }
 
 function buildConfidence(component, geometry, width, height, previousPalm, presence) {
-  const maskQuality = clamp((component.foregroundShare - 0.65) / 0.35);
+  const config = CONFIDENCE_CONFIG;
+  const maskQuality = clamp(
+    (component.foregroundShare - config.maskShareFloor) / config.maskShareRange,
+  );
   const radiusRatio = geometry.palm.radius / Math.min(width, height);
   const palmQuality =
-    radiusRatio >= 0.06 && radiusRatio <= 0.26
+    radiusRatio >= config.palmRadiusMin && radiusRatio <= config.palmRadiusMax
       ? 1
       : clamp(
-          1 - Math.min(Math.abs(radiusRatio - 0.06), Math.abs(radiusRatio - 0.26)) / 0.05,
+          1 -
+            Math.min(
+              Math.abs(radiusRatio - config.palmRadiusMin),
+              Math.abs(radiusRatio - config.palmRadiusMax),
+            ) /
+              config.palmRadiusFalloff,
         );
   // Clipping the guide box degrades confidence proportionally rather than
   // zeroing it: a fingertip grazing the top edge is a slightly worse frame,
@@ -30,16 +43,23 @@ function buildConfidence(component, geometry, width, height, previousPalm, prese
   // 0, which pushed otherwise-good frames under the submission threshold.)
   const clippedEdgePixels =
     component.borderSides.top + component.borderSides.left + component.borderSides.right;
-  const borderQuality = clamp(1 - clippedEdgePixels / (Math.min(width, height) * 0.5));
+  const borderQuality = clamp(
+    1 - clippedEdgePixels / (Math.min(width, height) * config.borderClipRange),
+  );
   let fingerQuality;
   if (geometry.raisedFingerCount === 0) {
-    fingerQuality = clamp((component.fillRatio - 0.32) / 0.35);
+    fingerQuality = clamp(
+      (component.fillRatio - config.fistFillFloor) / config.fistFillRange,
+    );
   } else {
     const evidence = geometry.fingertips.reduce(
       (total, tip) =>
         total +
-        clamp((tip.normalizedLength - 0.5) / 0.9) * 0.6 +
-        clamp(tip.prominence) * 0.4,
+        clamp(
+          (tip.normalizedLength - config.fingerLengthFloor) / config.fingerLengthRange,
+        ) *
+          config.fingerLengthWeight +
+        clamp(tip.prominence) * config.fingerProminenceWeight,
       0,
     );
     fingerQuality = evidence / geometry.fingertips.length;
@@ -53,14 +73,19 @@ function buildConfidence(component, geometry, width, height, previousPalm, prese
   const diagnostics = geometry.diagnostics ?? {};
   const clusterCount = diagnostics.clusterCount ?? geometry.raisedFingerCount;
   const acceptedCount = Math.max(1, geometry.raisedFingerCount);
-  const clusterAmbiguity = clamp((clusterCount - acceptedCount) / 3);
+  const clusterAmbiguity = clamp(
+    (clusterCount - acceptedCount) / config.clusterSurplusRange,
+  );
   const nearDuplicateRejections = (diagnostics.rejectedCandidates ?? []).filter(
     (candidate) =>
       candidate.rejectionReason === 'DUPLICATE_OF_ACCEPTED' ||
       candidate.rejectionReason === 'INSUFFICIENT_VALLEY_EVIDENCE',
   ).length;
-  const duplicateAmbiguity = clamp(nearDuplicateRejections / 2);
-  const clusterQuality = 1 - Math.max(clusterAmbiguity, duplicateAmbiguity) * 0.7;
+  const duplicateAmbiguity = clamp(
+    nearDuplicateRejections / config.duplicateRejectionRange,
+  );
+  const clusterQuality =
+    1 - Math.max(clusterAmbiguity, duplicateAmbiguity) * config.clusterPenalty;
 
   // Palm geometry should not jump sharply between adjacent frames; a large
   // frame-to-frame shift in centre or radius (relative to palm radius) usually
@@ -74,21 +99,28 @@ function buildConfidence(component, geometry, width, height, previousPalm, prese
       ) / geometry.palm.radius;
     const radiusShift =
       Math.abs(geometry.palm.radius - previousPalm.radius) / geometry.palm.radius;
-    stabilityQuality = clamp(1 - Math.max(centreShift / 0.6, radiusShift / 0.5));
+    stabilityQuality = clamp(
+      1 -
+        Math.max(
+          centreShift / config.centreShiftRange,
+          radiusShift / config.radiusShiftRange,
+        ),
+    );
   }
 
   // Two similarly sized skin blobs competing (classically a face and a hand
   // both inside the guide box) means the selection could plausibly have gone
   // the other way. Halve confidence rather than committing to a coin flip.
-  const presenceQuality = presence?.ambiguous ? 0.5 : 1;
+  const presenceQuality = presence?.ambiguous ? config.ambiguousPresencePenalty : 1;
 
+  const { weights } = config;
   return clamp(
-    (maskQuality * 0.2 +
-      palmQuality * 0.2 +
-      fingerQuality * 0.32 +
-      borderQuality * 0.08 +
-      clusterQuality * 0.12 +
-      stabilityQuality * 0.08) *
+    (maskQuality * weights.mask +
+      palmQuality * weights.palm +
+      fingerQuality * weights.fingers +
+      borderQuality * weights.border +
+      clusterQuality * weights.clusters +
+      stabilityQuality * weights.stability) *
       presenceQuality,
   );
 }
@@ -122,9 +154,16 @@ export function createGeometricPipeline({
       const component = presence.component;
       if (!component) {
         previousPalm = null;
+        // An empty box is a certain observation; a blob that merely failed a
+        // shape test is a judgement call that could still be a mis-read hand.
+        // Only the former is confident enough to confirm removal and re-arm
+        // the submitter -- see NO_HAND_CONFIDENCE in constants.js.
+        const definitivelyEmpty = DEFINITIVE_NO_HAND_REASONS.includes(presence.rejection);
         return {
           label: GESTURE_LABELS.NO_HAND,
-          confidence: 1,
+          confidence: definitivelyEmpty
+            ? NO_HAND_CONFIDENCE.empty
+            : NO_HAND_CONFIDENCE.ambiguous,
           state: 'NO_HAND',
           raisedFingerCount: null,
           // The reason matters for the player-facing hint: NO_WRIST_ENTRY
@@ -157,8 +196,16 @@ export function createGeometricPipeline({
       );
       previousPalm = geometry.palm;
       const count = geometry.raisedFingerCount;
-      const fistIsPlausible = count !== 0 || component.fillRatio >= 0.38;
-      if (!fistIsPlausible || confidence < 0.55) {
+      const fistIsPlausible =
+        count !== 0 || component.fillRatio >= CONFIDENCE_CONFIG.minimumFistFillRatio;
+      // More fingertips survived validation than a hand has. The count was
+      // capped to five, but the frame itself is untrustworthy and must not be
+      // reported as a confident five.
+      if (
+        geometry.diagnostics?.overGenerated ||
+        !fistIsPlausible ||
+        confidence < CONFIDENCE_CONFIG.minimumReportable
+      ) {
         return {
           label: null,
           confidence,

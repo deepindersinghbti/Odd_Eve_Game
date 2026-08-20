@@ -81,6 +81,35 @@ describe('hand silhouette geometry', () => {
     expect(palm.radius).toBeGreaterThan(20);
   });
 
+  it('REGRESSION reports the same palm radius wherever the hand sits in the ROI', () => {
+    // Palm radius is a property of the hand, not of its position, and it is
+    // the normaliser for every finger-length measurement. Seeding the ROI
+    // border as background used to pinch it for a hand running off the edge,
+    // shrinking the radius and inflating every normalized length -- and the
+    // wrist-entry rule deliberately puts the hand low, straight into it.
+    const size = 256;
+    const drawFistOnForearm = (fistY) => {
+      const mask = new Uint8Array(size * size);
+      for (let y = fistY; y < size; y += 1) {
+        for (let x = 102; x < 154; x += 1) mask[y * size + x] = 1;
+      }
+      for (let y = fistY - 40; y <= fistY + 40; y += 1) {
+        if (y < 0 || y >= size) continue;
+        for (let x = 88; x <= 168; x += 1) {
+          if (Math.hypot(x - 128, y - fistY) <= 40) mask[y * size + x] = 1;
+        }
+      }
+      return mask;
+    };
+
+    const radii = [120, 160, 190, 210, 225].map(
+      (fistY) => findPalmGeometry(drawFistOnForearm(fistY), size, size).radius,
+    );
+    for (const radius of radii) {
+      expect(radius).toBeCloseTo(radii[0], 5);
+    }
+  });
+
   it('normalizes visible protrusion height by palm radius', () => {
     expect(calculateVisibleFingerLength(70, 30, 20)).toBe(2);
   });

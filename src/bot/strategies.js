@@ -27,8 +27,15 @@ function adaptForContext(context, predictedHumanDistribution) {
     : normalizeWeights(predictedHumanDistribution);
 }
 
+// Rescales a value that fell inside one branch back onto [0, 1) for sampling
+// within that branch. Clamped because the branch boundaries are computed by
+// floating-point addition: 0.35 + 0.3 evaluates to 0.6499999999999999, making
+// the final branch a hair wider than its nominal weight, so a random value
+// within an ulp of 1 remapped to exactly 1.0 -- which validateRandomValue
+// rejects, throwing instead of choosing a number.
 function remapToBranch(randomValue, branchStart, branchWeight) {
-  return (randomValue - branchStart) / branchWeight;
+  const remapped = (randomValue - branchStart) / branchWeight;
+  return Math.min(Math.max(remapped, 0), 0.9999999999999999);
 }
 
 export function selectMediumBranch(randomValue) {
@@ -107,6 +114,12 @@ export function buildRecentTransitionDistribution(context, history) {
   return adaptForContext(context, predictedHumanDistribution);
 }
 
+// The hard difficulty's mixture, written out explicitly. `chooseHard` does NOT
+// call this: it picks a branch first and samples within it, which is stratified
+// sampling of the same mixture and gives lower variance per draw. The two are
+// deliberately different algorithms that must agree in the limit, so a change
+// to the branch weights belongs in HARD_BRANCH_WEIGHTS where both read it --
+// never in only one of these functions.
 export function buildHardDistribution(context, history) {
   const uniform = normalizeWeights(createUniformWeights());
   const global = applyProbabilityFloor(

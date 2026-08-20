@@ -6,6 +6,10 @@ import {
   RECOGNIZER_STATUS,
   createGestureRecognizer,
 } from '../gesture/index.js';
+// Imported from the module directly, not the barrel: this reference sits inside
+// an import.meta.env.DEV branch, so the bundler can drop the whole capture and
+// export module from production rather than shipping it switched off.
+import { createDiagnosticsRecorder } from '../gesture/diagnostics.js';
 
 const disabledState = {
   status: RECOGNIZER_STATUS.DISABLED,
@@ -24,6 +28,40 @@ const disabledState = {
   raisedFingerCount: null,
 };
 
+// Development-only frame capture. Attaches a recorder and exposes it on the
+// global object so a developer can inspect or export a misread frame from the
+// console. Production takes the other branch entirely: no recorder is created,
+// so no camera frame is ever retained.
+//
+//   __HAND_CRICKET_GESTURE_DEBUG__.last()      -- latest frame + reasoning
+//   __HAND_CRICKET_GESTURE_DEBUG__.fixture()   -- serialisable JSON record
+//   __HAND_CRICKET_GESTURE_DEBUG__.download()  -- save it (explicit action)
+//   __HAND_CRICKET_GESTURE_DEBUG__.clear()     -- drop retained frames
+function attachDevelopmentDiagnostics(options) {
+  const diagnosticsRecorder = createDiagnosticsRecorder({ enabled: true });
+  globalThis.__HAND_CRICKET_GESTURE_DEBUG__ = {
+    last: () => diagnosticsRecorder.last(),
+    all: () => diagnosticsRecorder.all(),
+    clear: () => diagnosticsRecorder.clear(),
+    fixture: (index = -1) => diagnosticsRecorder.toFixture(index),
+    download(index = -1, filename = 'gesture-fixture.json') {
+      const fixture = diagnosticsRecorder.toFixture(index);
+      if (!fixture) return false;
+      const blob = new globalThis.Blob([JSON.stringify(fixture)], {
+        type: 'application/json',
+      });
+      const url = globalThis.URL.createObjectURL(blob);
+      const link = globalThis.document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      globalThis.URL.revokeObjectURL(url);
+      return true;
+    },
+  };
+  return { ...options, diagnosticsRecorder };
+}
+
 function defaultRecognizerFactory(options) {
   if (
     import.meta.env.MODE === 'test-e2e' &&
@@ -31,7 +69,9 @@ function defaultRecognizerFactory(options) {
   ) {
     return globalThis.__HAND_CRICKET_GESTURE_TEST_FACTORY__(options);
   }
-  return createGestureRecognizer(options);
+  return createGestureRecognizer(
+    import.meta.env.DEV ? attachDevelopmentDiagnostics(options) : options,
+  );
 }
 
 export function useGestureRecognition({
