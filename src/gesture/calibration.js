@@ -1,4 +1,10 @@
-import { median, medianAbsoluteDeviation, percentile, rgbToYCbCr } from './color.js';
+import { median, medianAbsoluteDeviation } from './color.js';
+import { SEGMENTATION_CONFIG } from './constants.js';
+import {
+  buildBackgroundYCbCr,
+  estimateFrameShift,
+  isForegroundPixel,
+} from './foreground.js';
 
 function validateFrames(frames, width, height) {
   if (!Array.isArray(frames) || frames.length < 3) {
@@ -65,22 +71,55 @@ export function buildSkinCalibration(
   const boxHeight = Math.floor(height * sampleBoxRatio);
   const startX = Math.floor((width - boxWidth) / 2);
   const startY = Math.floor((height - boxHeight) / 2);
+  const backgroundYCbCr = buildBackgroundYCbCr(background, width, height);
   const cbValues = [];
   const crValues = [];
-  const differences = [];
 
   for (const frame of frames) {
+    // Palm pixels are selected with exactly the same foreground test used at
+    // inference time, including correction for camera drift. Auto exposure and
+    // auto white balance routinely fire when a hand enters the frame, so the
+    // palm capture is frequently taken under different camera settings than
+    // the background capture that preceded it. Selecting by raw RGB difference
+    // (the previous approach) then marked the whole sample box as "hand" and
+    // contaminated the skin model with background colour.
+    const shift = estimateFrameShift(frame, background, width, height);
     for (let y = startY; y < startY + boxHeight; y += 2) {
       for (let x = startX; x < startX + boxWidth; x += 2) {
         const pixel = y * width + x;
-        const difference = backgroundDifference(frame, background, pixel);
-        if (difference < 12) continue;
         const offset = pixel * 4;
-        const colour = rgbToYCbCr(frame[offset], frame[offset + 1], frame[offset + 2]);
-        if (colour.y < 20 || colour.y > 245) continue;
-        cbValues.push(colour.cb);
-        crValues.push(colour.cr);
-        differences.push(difference);
+        const reference = pixel * 3;
+        const rawRed = frame[offset];
+        const rawGreen = frame[offset + 1];
+        const rawBlue = frame[offset + 2];
+        const rawLuma = 0.299 * rawRed + 0.587 * rawGreen + 0.114 * rawBlue;
+        if (rawLuma < SEGMENTATION_CONFIG.minimumLuminance) continue;
+        if (rawLuma > SEGMENTATION_CONFIG.maximumLuminance) continue;
+
+        // Stored gain-corrected, so the model lives in the background
+        // capture's colour space and inference can correct into that same
+        // frame of reference.
+        const red = rawRed / shift.gainRed;
+        const green = rawGreen / shift.gainGreen;
+        const blue = rawBlue / shift.gainBlue;
+        const luma = 0.299 * red + 0.587 * green + 0.114 * blue;
+        const cb = 128 - 0.168736 * red - 0.331264 * green + 0.5 * blue;
+        const cr = 128 + 0.5 * red - 0.418688 * green - 0.081312 * blue;
+        if (
+          !isForegroundPixel(
+            luma,
+            cb,
+            cr,
+            backgroundYCbCr[reference],
+            backgroundYCbCr[reference + 1],
+            backgroundYCbCr[reference + 2],
+            SEGMENTATION_CONFIG,
+          )
+        ) {
+          continue;
+        }
+        cbValues.push(cb);
+        crValues.push(cr);
       }
     }
   }
@@ -100,12 +139,10 @@ export function buildSkinCalibration(
     width,
     height,
     background,
+    backgroundYCbCr,
     cb,
     cr,
     cbTolerance: clamp(cbMad * 3 + 7, 12, 34),
     crTolerance: clamp(crMad * 3 + 7, 12, 34),
-    foregroundThreshold: clamp(percentile(differences, 0.2) * 0.45, 14, 42),
-    minimumLuminance: 18,
-    maximumLuminance: 248,
   });
 }

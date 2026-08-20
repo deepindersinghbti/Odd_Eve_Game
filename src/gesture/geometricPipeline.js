@@ -1,4 +1,8 @@
-import { GESTURE_LABELS } from './constants.js';
+import {
+  DEFINITIVE_NO_HAND_REASONS,
+  GESTURE_LABELS,
+  NO_HAND_CONFIDENCE,
+} from './constants.js';
 import { analyzeHandGeometry } from './fingerGeometry.js';
 import { analyzeHandPresence } from './segmentation.js';
 
@@ -122,9 +126,16 @@ export function createGeometricPipeline({
       const component = presence.component;
       if (!component) {
         previousPalm = null;
+        // An empty box is a certain observation; a blob that merely failed a
+        // shape test is a judgement call that could still be a mis-read hand.
+        // Only the former is confident enough to confirm removal and re-arm
+        // the submitter -- see NO_HAND_CONFIDENCE in constants.js.
+        const definitivelyEmpty = DEFINITIVE_NO_HAND_REASONS.includes(presence.rejection);
         return {
           label: GESTURE_LABELS.NO_HAND,
-          confidence: 1,
+          confidence: definitivelyEmpty
+            ? NO_HAND_CONFIDENCE.empty
+            : NO_HAND_CONFIDENCE.ambiguous,
           state: 'NO_HAND',
           raisedFingerCount: null,
           // The reason matters for the player-facing hint: NO_WRIST_ENTRY

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_STABILITY_SETTINGS,
   GESTURE_TO_NUMBER,
   GEOMETRY_CONFIG,
   analyzeHandGeometry,
@@ -202,7 +203,19 @@ describe('finger-counting regression: two fingers must never be reported as five
     // resubmit.
     const afterSubmission = filter.push({ label, confidence: 0.9, timestamp: 1100 });
     expect(afterSubmission.submission).toBeNull();
-    const afterNoHand = filter.push({ label: 'NO_HAND', confidence: 1, timestamp: 1200 });
+    // Re-arming needs sustained confirmed removal, not a single empty frame.
+    let afterNoHand = null;
+    for (
+      let frame = 0;
+      frame < DEFAULT_STABILITY_SETTINGS.requiredRemovalFrames;
+      frame += 1
+    ) {
+      afterNoHand = filter.push({
+        label: 'NO_HAND',
+        confidence: 1,
+        timestamp: 1200 + frame * 100,
+      });
+    }
     expect(afterNoHand.armed).toBe(true);
   });
 });

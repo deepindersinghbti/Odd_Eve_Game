@@ -17,6 +17,32 @@ import { HAND_PRESENCE_CONFIG } from './constants.js';
 // one is chosen. Rejection reasons are always reported so a frame that fails
 // is explainable rather than silently becoming NO_HAND.
 
+// Mean width of the blob across the two stacked bands at its lowest edge,
+// expressed as (lower band / upper band). A blob that was CUT OFF -- a sleeve
+// cuff, or a forearm leaving the frame -- keeps its width right to the edge and
+// scores near 1. A blob that ENDS naturally in a rounded cap -- a chin, a fist
+// held clear of the frame edge -- narrows sharply and scores well below 1.
+//
+// Returns null when the blob is too short to carry two bands, which is treated
+// as "cannot tell" (no cuff entry), never as a silent pass.
+function measureBottomFlatness(component, width, height, settings) {
+  const bandRows = Math.max(2, Math.round(height * settings.cuffSampleRatio));
+  const maxY = component.bounds.maxY;
+  const lowerStart = maxY - bandRows + 1;
+  const upperStart = lowerStart - bandRows;
+  if (upperStart < component.bounds.minY) return null;
+
+  let lower = 0;
+  let upper = 0;
+  for (const index of component.indices) {
+    const y = Math.floor(index / width);
+    if (y >= lowerStart && y <= maxY) lower += 1;
+    else if (y >= upperStart && y < lowerStart) upper += 1;
+  }
+  if (upper === 0) return null;
+  return lower / upper;
+}
+
 export function describeComponent(component, width, height, overrides = {}) {
   const settings = { ...HAND_PRESENCE_CONFIG, ...overrides };
   const boundsWidth =
@@ -35,6 +61,23 @@ export function describeComponent(component, width, height, overrides = {}) {
   // a hand on a forearm, so only penalize width excess.
   const aspectRatio = boundsWidth / boundsHeight;
 
+  // (a) Bare forearm: the blob runs off the bottom of the guide box.
+  const touchesBottom = bottomEdgeRatio >= settings.minimumBottomEdgeRatio;
+
+  // (b) Sleeved forearm: the blob stops short of the bottom, but ends in a flat
+  // cut close to the edge rather than a rounded cap. Without this a long sleeve
+  // makes the hand indistinguishable from a floating face and the game becomes
+  // unplayable -- see maximumBottomGapRatio in constants.js.
+  const bottomGapRatio = (height - 1 - component.bounds.maxY) / height;
+  const bottomFlatness = touchesBottom
+    ? null
+    : measureBottomFlatness(component, width, height, settings);
+  const hasCuffEntry =
+    !touchesBottom &&
+    bottomGapRatio <= settings.maximumBottomGapRatio &&
+    bottomFlatness !== null &&
+    bottomFlatness >= settings.minimumCuffFlatness;
+
   return {
     areaRatio: component.areaRatio,
     fillRatio: component.fillRatio,
@@ -46,7 +89,10 @@ export function describeComponent(component, width, height, overrides = {}) {
     topEdgeRatio,
     leftEdgeRatio,
     rightEdgeRatio,
-    hasWristEntry: bottomEdgeRatio >= settings.minimumBottomEdgeRatio,
+    bottomGapRatio,
+    bottomFlatness,
+    entryMode: touchesBottom ? 'BOTTOM_EDGE' : hasCuffEntry ? 'SLEEVE_CUFF' : null,
+    hasWristEntry: touchesBottom || hasCuffEntry,
   };
 }
 
@@ -57,8 +103,9 @@ export function rejectHandComponent(component, width, height, overrides = {}) {
 
   if (metrics.areaRatio < settings.minimumAreaRatio) return 'AREA_TOO_SMALL';
   if (metrics.areaRatio > settings.maximumAreaRatio) return 'AREA_TOO_LARGE';
-  // The decisive face rejector: a face does not touch the bottom of the guide
-  // box, a hand reaching in from below always does.
+  // The decisive face rejector: a hand reaching in from below either runs off
+  // the bottom edge (bare arm) or ends in a flat cuff cut just above it
+  // (sleeved arm). A face floats clear of the edge and ends in a rounded chin.
   if (settings.requireWristEntry && !metrics.hasWristEntry) return 'NO_WRIST_ENTRY';
   if (metrics.fillRatio > settings.maximumFillRatio) return 'TOO_SOLID_FOR_HAND';
   if (metrics.fillRatio < settings.minimumFillRatio) return 'FRAGMENTED';
@@ -76,7 +123,13 @@ export function rejectHandComponent(component, width, height, overrides = {}) {
 // Higher is more hand-like. Used only to choose between components that have
 // ALREADY passed rejectHandComponent, so it never rescues an implausible blob.
 function handScore(metrics) {
-  const wristEvidence = Math.min(1, metrics.bottomEdgeRatio / 0.25);
+  // A sleeved hand has no bottom-edge contact at all, so score its cuff
+  // evidence instead -- otherwise it would always lose a tie to a bare-armed
+  // competitor, which is the same bias that made the sleeve case unplayable.
+  const wristEvidence =
+    metrics.entryMode === 'SLEEVE_CUFF'
+      ? Math.min(1, metrics.bottomFlatness ?? 0)
+      : Math.min(1, metrics.bottomEdgeRatio / 0.25);
   const sizeEvidence = Math.min(1, metrics.areaRatio / 0.3);
   // A hand is less box-filling than a face; reward moderate fill ratios.
   const shapeEvidence = 1 - Math.min(1, Math.abs(metrics.fillRatio - 0.5) / 0.5);

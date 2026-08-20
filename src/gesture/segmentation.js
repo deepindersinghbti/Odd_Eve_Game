@@ -1,52 +1,11 @@
 import { cleanMask } from './binaryMask.js';
-import { rgbToYCbCr } from './color.js';
 import { findComponents } from './connectedComponents.js';
 import { SEGMENTATION_CONFIG } from './constants.js';
+import { estimateFrameShift, isForegroundPixel } from './foreground.js';
 import { selectHandComponent } from './handPresence.js';
 
-function passesFallbackSkin(colour, gamut) {
-  return (
-    colour.cb >= gamut.cbMin &&
-    colour.cb <= gamut.cbMax &&
-    colour.cr >= gamut.crMin &&
-    colour.cr <= gamut.crMax
-  );
-}
-
-// Median of a Float32Array-backed sample, via a copy so the input is not
-// reordered. Used to estimate the frame's global exposure shift.
-function medianOf(values, count) {
-  if (!count) return 1;
-  const sample = Array.prototype.slice.call(values, 0, count);
-  sample.sort((first, second) => first - second);
-  const middle = count >> 1;
-  return count % 2 ? sample[middle] : (sample[middle - 1] + sample[middle]) / 2;
-}
-
-// Estimates how much the camera's auto-exposure has shifted the WHOLE frame
-// since calibration, as a multiplicative luminance ratio. A global shift moves
-// every pixel's ratio together, so its median is a robust estimate of the shift
-// itself -- dividing it out leaves only genuine local changes (a hand).
-export function estimateExposureRatio(data, calibration) {
-  const { width, height } = calibration;
-  const pixelCount = width * height;
-  const stride = 7; // sparse sample; exposure is global, no need for every pixel
-  const ratios = new Float32Array(Math.ceil(pixelCount / stride));
-  let count = 0;
-  for (let pixel = 0; pixel < pixelCount; pixel += stride) {
-    const offset = pixel * 4;
-    const reference = pixel * 3;
-    const backgroundLuma =
-      0.299 * calibration.background[reference] +
-      0.587 * calibration.background[reference + 1] +
-      0.114 * calibration.background[reference + 2];
-    if (backgroundLuma < 8) continue;
-    const luma =
-      0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2];
-    ratios[count++] = luma / backgroundLuma;
-  }
-  const median = medianOf(ratios, count);
-  return Number.isFinite(median) && median > 0.05 ? median : 1;
+function passesFallbackSkin(cb, cr, gamut) {
+  return cb >= gamut.cbMin && cb <= gamut.cbMax && cr >= gamut.crMin && cr <= gamut.crMax;
 }
 
 export function segmentHandPixels(data, calibration, output) {
@@ -58,50 +17,73 @@ export function segmentHandPixels(data, calibration, output) {
   const rawMask = output ?? new Uint8Array(width * height);
   rawMask.fill(0);
 
-  const exposureRatio = estimateExposureRatio(data, calibration);
+  const backgroundYCbCr = calibration.backgroundYCbCr;
+  const shift = estimateFrameShift(data, calibration.background, width, height);
 
+  // The gain correction is a per-channel scale and the YCbCr transform is
+  // linear, so the two fold into one set of coefficients. This applies the
+  // white-balance correction for free -- same arithmetic per pixel as an
+  // uncorrected conversion, no divisions in the inner loop.
+  const invRed = 1 / shift.gainRed;
+  const invGreen = 1 / shift.gainGreen;
+  const invBlue = 1 / shift.gainBlue;
+  const yR = 0.299 * invRed;
+  const yG = 0.587 * invGreen;
+  const yB = 0.114 * invBlue;
+  const cbR = -0.168736 * invRed;
+  const cbG = -0.331264 * invGreen;
+  const cbB = 0.5 * invBlue;
+  const crR = 0.5 * invRed;
+  const crG = -0.418688 * invGreen;
+  const crB = -0.081312 * invBlue;
+
+  // YCbCr is computed inline rather than through rgbToYCbCr so the inner loop
+  // allocates nothing. At 256x256 the object-returning version allocated
+  // ~130k short-lived objects per frame.
   for (let pixel = 0; pixel < width * height; pixel += 1) {
     const offset = pixel * 4;
     const reference = pixel * 3;
-    const colour = rgbToYCbCr(data[offset], data[offset + 1], data[offset + 2]);
+    const rawRed = data[offset];
+    const rawGreen = data[offset + 1];
+    const rawBlue = data[offset + 2];
 
-    if (colour.y < settings.minimumLuminance || colour.y > settings.maximumLuminance) {
+    // Sensor-clipping bound, applied to the RAW signal: once a channel
+    // saturates its true value is unrecoverable, and no gain correction can
+    // bring it back.
+    const rawLuma = 0.299 * rawRed + 0.587 * rawGreen + 0.114 * rawBlue;
+    if (rawLuma < settings.minimumLuminance || rawLuma > settings.maximumLuminance) {
       continue;
     }
+
+    // Gain-corrected YCbCr in one step, putting the pixel back into the colour
+    // space the calibration was taken in so both tests below compare like with
+    // like.
+    const luma = yR * rawRed + yG * rawGreen + yB * rawBlue;
+    const cb = 128 + cbR * rawRed + cbG * rawGreen + cbB * rawBlue;
+    const cr = 128 + crR * rawRed + crG * rawGreen + crB * rawBlue;
 
     // --- Skin evidence -----------------------------------------------------
     // Calibrated ellipse first; the published gamut only widens it, and never
     // acts alone because the foreground test below still has to pass.
-    const cbDistance = (colour.cb - calibration.cb) / calibration.cbTolerance;
-    const crDistance = (colour.cr - calibration.cr) / calibration.crTolerance;
+    const cbDistance = (cb - calibration.cb) / calibration.cbTolerance;
+    const crDistance = (cr - calibration.cr) / calibration.crTolerance;
     const withinCalibratedSkin =
       cbDistance * cbDistance + crDistance * crDistance <= settings.skinEllipseCutoff;
-    if (!withinCalibratedSkin && !passesFallbackSkin(colour, settings.fallbackSkin)) {
+    if (!withinCalibratedSkin && !passesFallbackSkin(cb, cr, settings.fallbackSkin)) {
       continue;
     }
 
-    // --- Foreground evidence (exposure invariant) --------------------------
-    const background = rgbToYCbCr(
-      calibration.background[reference],
-      calibration.background[reference + 1],
-      calibration.background[reference + 2],
-    );
-    const chromaDifference = Math.hypot(
-      colour.cb - background.cb,
-      colour.cr - background.cr,
-    );
-    // Undo the estimated global exposure shift before comparing luminance, so
-    // a camera that re-exposed when the hand appeared does not mark the entire
-    // ROI (or none of it) as foreground.
-    const compensatedBackgroundLuma = background.y * exposureRatio;
-    const luminanceRatio =
-      compensatedBackgroundLuma > 1
-        ? Math.abs(colour.y / compensatedBackgroundLuma - 1)
-        : 0;
-
+    // --- Foreground evidence (camera-drift invariant) ----------------------
     if (
-      chromaDifference >= settings.minimumChromaDifference ||
-      luminanceRatio >= settings.minimumLuminanceRatio
+      isForegroundPixel(
+        luma,
+        cb,
+        cr,
+        backgroundYCbCr[reference],
+        backgroundYCbCr[reference + 1],
+        backgroundYCbCr[reference + 2],
+        settings,
+      )
     ) {
       rawMask[pixel] = 1;
     }

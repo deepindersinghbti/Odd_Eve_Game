@@ -92,6 +92,15 @@ function faceAndHandFrame() {
   return frame;
 }
 
+// The same gesture with a long sleeve: the forearm is no longer skin-coloured,
+// so the skin blob ends at the cuff instead of running off the bottom edge.
+const SLEEVE = [40, 45, 60];
+function sleevedHandFrame(fingerCount = 2) {
+  const frame = handFrame(fingerCount);
+  paintRectangle(frame, 55, 98, 20, 30, SLEEVE); // forearm covered
+  return frame;
+}
+
 function buildCalibration() {
   const backgroundFrames = Array.from({ length: 5 }, () => solidFrame(BACKGROUND));
   const palmFrames = Array.from({ length: 5 }, () => handFrame(4));
@@ -108,11 +117,33 @@ describe('hand versus face discrimination', () => {
     expect(result.raisedFingerCount).toBe(2);
   });
 
+  it('REGRESSION detects the same gesture when the forearm is covered by a sleeve', () => {
+    // End-to-end through segmentation: a sleeve removes the forearm from the
+    // skin mask entirely, so the hand no longer touches the bottom edge. It
+    // must still be recognised, and produce the same count as the bare arm.
+    const bare = createGeometricPipeline({ calibration }).analyze(handFrame(2));
+    const sleeved = createGeometricPipeline({ calibration }).analyze(sleevedHandFrame(2));
+    expect(sleeved.state).toBe('FINGERS');
+    expect(sleeved.raisedFingerCount).toBe(2);
+    expect(sleeved.raisedFingerCount).toBe(bare.raisedFingerCount);
+  });
+
   it('REGRESSION rejects a face as NO_HAND with an explanatory reason', () => {
     const result = createGeometricPipeline({ calibration }).analyze(faceFrame());
     expect(result.state).toBe('NO_HAND');
     expect(result.gameValue).toBeUndefined();
     // Specifically rejected for the structural reason, not by luck of area.
+    expect(result.quality.rejection).toBe('NO_WRIST_ENTRY');
+  });
+
+  it('rejects a face held low enough to clear the cuff position check', () => {
+    // The adversarial case for the sleeve allowance: a face low in the box
+    // passes the "ends near the bottom" half of cuff entry, so rejection has
+    // to come from the taper -- a chin narrows, a cut cuff does not.
+    const frame = solidFrame(BACKGROUND);
+    paintEllipse(frame, 64, 72, 30, 38); // ends ~17px above the bottom edge
+    const result = createGeometricPipeline({ calibration }).analyze(frame);
+    expect(result.state).toBe('NO_HAND');
     expect(result.quality.rejection).toBe('NO_WRIST_ENTRY');
   });
 
@@ -155,27 +186,61 @@ describe('hand-presence gates in isolation', () => {
     }
   };
 
-  // A hand-shaped blob (palm + two fingers + wrist), optionally detached from
-  // the bottom edge. Deliberately not a solid rectangle: a perfectly box-
-  // filling blob is itself implausible as a hand and is rejected on that
-  // basis, which would mask the wrist-entry behaviour under test.
-  const paintHand = (mask, offsetX, { reachesBottom = true } = {}) => {
+  const roundedCap = (mask, cx, cy, radiusX, radiusY) => {
+    for (let row = 0; row < HEIGHT; row += 1) {
+      for (let col = 0; col < WIDTH; col += 1) {
+        const dx = (col - cx) / radiusX;
+        const dy = (row - cy) / radiusY;
+        if (dx * dx + dy * dy <= 1) mask[row * WIDTH + col] = 1;
+      }
+    }
+  };
+
+  // A hand-shaped blob (palm + two fingers + wrist). `ending` selects how the
+  // blob terminates at the bottom, which is the whole discriminator:
+  //   'bottomEdge' - bare forearm running off the frame edge
+  //   'cuff'       - sleeved forearm: stops short, flat cut near the edge
+  //   'rounded'    - floating blob ending in a rounded cap, like a chin
+  const paintHand = (mask, offsetX, { ending = 'bottomEdge' } = {}) => {
     fill(mask, offsetX, offsetX + 40, 58, 106); // palm
     fill(mask, offsetX + 6, offsetX + 14, 25, 58); // finger
     fill(mask, offsetX + 20, offsetX + 28, 25, 58); // finger
-    fill(mask, offsetX + 12, offsetX + 28, 106, reachesBottom ? HEIGHT : 118); // wrist
+    if (ending === 'bottomEdge') fill(mask, offsetX + 12, offsetX + 28, 106, HEIGHT);
+    else if (ending === 'cuff') fill(mask, offsetX + 12, offsetX + 28, 106, 118);
+    else roundedCap(mask, offsetX + 20, 106, 20, 12);
   };
 
-  it('rejects a hand-shaped blob that does not reach the bottom edge', () => {
-    const floating = maskComponents((mask) =>
-      paintHand(mask, 40, { reachesBottom: false }),
-    );
-    expect(selectHandComponent(floating, WIDTH, HEIGHT).rejection).toBe('NO_WRIST_ENTRY');
+  it('accepts a bare forearm running off the bottom edge', () => {
+    const connected = maskComponents((mask) => paintHand(mask, 40));
+    const selection = selectHandComponent(connected, WIDTH, HEIGHT);
+    expect(selection.rejection).toBeNull();
+    expect(selection.metrics.entryMode).toBe('BOTTOM_EDGE');
   });
 
-  it('accepts the same blob once it reaches the bottom edge', () => {
-    const connected = maskComponents((mask) => paintHand(mask, 40));
-    expect(selectHandComponent(connected, WIDTH, HEIGHT).rejection).toBeNull();
+  it('REGRESSION accepts a SLEEVED forearm that stops short of the bottom edge', () => {
+    // Without this the game is unplayable for anyone in long sleeves: their
+    // skin blob ends at the cuff and floats exactly like a face does.
+    const sleeved = maskComponents((mask) => paintHand(mask, 40, { ending: 'cuff' }));
+    const selection = selectHandComponent(sleeved, WIDTH, HEIGHT);
+    expect(selection.rejection).toBeNull();
+    expect(selection.metrics.entryMode).toBe('SLEEVE_CUFF');
+  });
+
+  it('still rejects a blob that ends in a rounded cap rather than a cut', () => {
+    // The cuff allowance must not become a blanket pass for anything floating:
+    // a rounded ending is what a chin looks like, and stays rejected.
+    const rounded = maskComponents((mask) => paintHand(mask, 40, { ending: 'rounded' }));
+    const selection = selectHandComponent(rounded, WIDTH, HEIGHT);
+    expect(selection.rejection).toBe('NO_WRIST_ENTRY');
+  });
+
+  it('still rejects a flat-bottomed blob that floats too far above the edge', () => {
+    // Flatness alone is not enough -- a cuff also has to be near the edge, or
+    // any rectangular background object would qualify.
+    const high = maskComponents((mask) => {
+      fill(mask, 40, 80, 20, 60);
+    });
+    expect(selectHandComponent(high, WIDTH, HEIGHT).rejection).toBe('NO_WRIST_ENTRY');
   });
 
   it('REGRESSION prefers a smaller wrist-connected blob over a larger floating one', () => {

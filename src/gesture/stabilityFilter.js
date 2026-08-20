@@ -15,7 +15,11 @@ function validateSettings(settings) {
     settings.requiredAgreement > 1 &&
     settings.requiredAgreement <= settings.windowSize &&
     settings.minimumHoldMs >= 0 &&
-    settings.cooldownMs >= 0;
+    settings.cooldownMs >= 0 &&
+    Number.isInteger(settings.requiredRemovalFrames) &&
+    settings.requiredRemovalFrames >= 1 &&
+    settings.minimumRemovalConfidence >= 0 &&
+    settings.minimumRemovalConfidence <= 1;
   if (!valid) throw new TypeError('Invalid gesture stability settings.');
 }
 
@@ -29,6 +33,9 @@ export function createStabilityFilter(overrides = {}) {
   let mismatchCount = 0;
   let cooldownUntil = 0;
   let armed = true;
+  // Consecutive confirmed-empty frames seen so far. Tracked separately from the
+  // candidate window because it survives the window being cleared.
+  let removalStreak = 0;
 
   function clearTracking() {
     window = [];
@@ -60,6 +67,7 @@ export function createStabilityFilter(overrides = {}) {
       cooldown: timestamp < cooldownUntil || !armed,
       armed,
       agreement,
+      removalStreak,
       windowLength: window.length,
       submission: null,
     };
@@ -73,9 +81,25 @@ export function createStabilityFilter(overrides = {}) {
     }
     if (label === GESTURE_LABELS.NO_HAND) {
       clearTracking();
-      armed = true;
+      // Only a CONFIDENT no-hand reading counts toward removal, and only after
+      // several in a row -- see requiredRemovalFrames in constants.js. An
+      // ambiguous reading ("something is there but it is not hand-shaped")
+      // breaks the streak rather than extending it: failing closed costs the
+      // player a moment's wait, while failing open submits a number they did
+      // not choose.
+      if (
+        Number.isFinite(confidence) &&
+        confidence >= settings.minimumRemovalConfidence
+      ) {
+        removalStreak += 1;
+        if (removalStreak >= settings.requiredRemovalFrames) armed = true;
+      } else {
+        removalStreak = 0;
+      }
       return snapshot({ label, confidence, timestamp });
     }
+    // Anything other than a confirmed-empty box means the box is occupied.
+    removalStreak = 0;
     if (!GESTURE_LABEL_LIST.includes(label) || !Number.isFinite(confidence)) {
       clearTracking();
       return snapshot({ timestamp });
@@ -128,9 +152,15 @@ export function createStabilityFilter(overrides = {}) {
     reset({ requireRemoval = false } = {}) {
       clearTracking();
       cooldownUntil = 0;
+      removalStreak = 0;
       armed = !requireRemoval;
     },
-    pause: clearTracking,
+    pause() {
+      // A partial removal streak is stale once we stop observing frames, so it
+      // is discarded rather than resumed.
+      clearTracking();
+      removalStreak = 0;
+    },
     getState(timestamp = 0) {
       return snapshot({ timestamp });
     },

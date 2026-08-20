@@ -9,6 +9,7 @@ export * from './crop.js';
 export * from './distanceTransform.js';
 export * from './errors.js';
 export * from './fingerGeometry.js';
+export * from './foreground.js';
 export * from './geometricPipeline.js';
 export * from './handPresence.js';
 export * from './predictionLoop.js';
