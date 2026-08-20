@@ -234,7 +234,6 @@ function suppressDuplicates(candidates, settings, totalBins, rejectedOut) {
       continue;
     }
     accepted.push(candidate);
-    if (accepted.length >= settings.maxFingertips) break;
   }
   return accepted;
 }
@@ -408,13 +407,23 @@ export function analyzeHandGeometry(component, width, height, overrides = {}) {
   }
 
   const accepted = suppressDuplicates(longEnough, settings, smoothed.length, rejected);
-  const fingertips = enforceValleyEvidence(
+  const surviving = enforceValleyEvidence(
     accepted,
     radial,
     settings,
     palm.radius,
     rejected,
   );
+
+  // More than five surviving fingertips is not a hand, it is evidence the mask
+  // is bad. Truncating to five silently (the previous behaviour) turned an
+  // untrustworthy frame into a confident "5"; the excess is recorded so the
+  // pipeline can drop the frame to LOW_CONFIDENCE instead.
+  const overGenerated = surviving.length > settings.maxFingertips;
+  const fingertips = surviving.slice(0, settings.maxFingertips);
+  for (const dropped of surviving.slice(settings.maxFingertips)) {
+    rejected.push({ ...dropped, rejectionReason: 'EXCEEDS_MAX_FINGERTIPS' });
+  }
   fingertips.sort((first, second) => first.x - second.x);
 
   return {
@@ -428,6 +437,7 @@ export function analyzeHandGeometry(component, width, height, overrides = {}) {
       rawPeakCount: rawPeakBins.length,
       clusterCount: clusters.length,
       acceptedBeforeValleyPass: accepted.length,
+      overGenerated,
       rejectedCandidates: rejected,
     },
   };

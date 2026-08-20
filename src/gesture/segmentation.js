@@ -94,19 +94,15 @@ export function segmentHandPixels(data, calibration, output) {
 // Returns the chosen hand component plus the evidence behind the choice, so
 // callers can distinguish "no skin at all" from "skin present but it is not
 // shaped like a hand reaching in from below" (typically a face).
-export function extractHandComponent(data, calibration) {
-  const mask = segmentHandPixels(data, calibration);
-  const components = findComponents(mask, calibration.width, calibration.height);
-  const selection = selectHandComponent(
-    components,
-    calibration.width,
-    calibration.height,
-  );
-  return selection.component;
-}
-
 export function analyzeHandPresence(data, calibration) {
   const mask = segmentHandPixels(data, calibration);
   const components = findComponents(mask, calibration.width, calibration.height);
   return selectHandComponent(components, calibration.width, calibration.height);
+}
+
+// Convenience wrapper for callers that only want the component. Delegates
+// rather than repeating the segment/label/select sequence, so there is one
+// path that can drift.
+export function extractHandComponent(data, calibration) {
+  return analyzeHandPresence(data, calibration).component;
 }

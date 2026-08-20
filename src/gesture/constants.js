@@ -164,6 +164,62 @@ export const SEGMENTATION_CONFIG = Object.freeze({
   maximumLuminanceShift: 2.5,
 });
 
+// Confidence scoring. Every submission passes through these numbers twice --
+// once at the pipeline's own floor, once at the stability filter's -- which
+// made them the highest-leverage constants in the system while they sat
+// inline and undocumented in geometricPipeline.js.
+export const CONFIDENCE_CONFIG = Object.freeze({
+  // Weights of the evidence terms. They sum to 1; each term is already
+  // normalised to [0, 1] before weighting.
+  weights: Object.freeze({
+    mask: 0.2, // how cleanly the blob dominates the foreground
+    palm: 0.2, // palm radius within a plausible band
+    fingers: 0.32, // per-fingertip length and prominence margins
+    border: 0.08, // how much of the blob is clipped by the guide box
+    clusters: 0.12, // how ambiguous the candidate set was
+    stability: 0.08, // frame-to-frame palm agreement
+  }),
+  // Minimum confidence for the pipeline to emit a countable label at all.
+  // Below this the frame becomes LOW_CONFIDENCE and cannot submit.
+  minimumReportable: 0.55,
+  // maskQuality ramps from 0 to 1 as the chosen blob's share of all
+  // foreground rises across this band.
+  maskShareFloor: 0.65,
+  maskShareRange: 0.35,
+  // Palm radius, as a fraction of the ROI's short edge, that counts as fully
+  // plausible; outside the band confidence falls off over `palmRadiusFalloff`.
+  palmRadiusMin: 0.06,
+  palmRadiusMax: 0.26,
+  palmRadiusFalloff: 0.05,
+  // Fraction of the ROI's short edge worth of clipped edge pixels that drives
+  // border quality to zero.
+  borderClipRange: 0.5,
+  // A closed fist is judged by how solidly it fills its bounding box.
+  fistFillFloor: 0.32,
+  fistFillRange: 0.35,
+  // Per-fingertip evidence: normalized length is scored across this band, and
+  // length and prominence are blended in this ratio.
+  fingerLengthFloor: 0.5,
+  fingerLengthRange: 0.9,
+  fingerLengthWeight: 0.6,
+  fingerProminenceWeight: 0.4,
+  // Ambiguity: how many surplus clusters, and how many last-stage duplicate
+  // rejections, drive the cluster term to its floor, and how far it can fall.
+  clusterSurplusRange: 3,
+  duplicateRejectionRange: 2,
+  clusterPenalty: 0.7,
+  // Frame-to-frame palm movement, as a fraction of palm radius, that drives
+  // the stability term to zero.
+  centreShiftRange: 0.6,
+  radiusShiftRange: 0.5,
+  // Multiplier applied when two similarly sized blobs competed to be the hand
+  // (classically a face and a hand both in the box).
+  ambiguousPresencePenalty: 0.5,
+  // A fist must fill at least this much of its bounding box to be believable
+  // as a fist rather than a failed segmentation.
+  minimumFistFillRatio: 0.38,
+});
+
 // Hand-presence gates, all as fractions of the guide box so they are
 // resolution independent.
 export const HAND_PRESENCE_CONFIG = Object.freeze({

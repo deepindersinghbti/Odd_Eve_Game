@@ -88,6 +88,33 @@ when a plausible, sufficiently compact hand component and palm are present. An a
 invalid component is `NO_HAND`; contradictory evidence is `LOW_CONFIDENCE` and cannot
 submit.
 
+## Capturing a real misread (development only)
+
+Every fix in this subsystem so far was driven by synthetic fixtures, which means
+each one only tested a failure that had already been imagined. The
+one-finger-as-three bug survived four such fixtures because none of them modelled
+a hand close to the camera.
+
+In a development build the recognizer retains the last few frames alongside the
+pipeline's own reasoning, reachable from the browser console:
+
+```text
+__HAND_CRICKET_GESTURE_DEBUG__.last()      // latest frame + reasoning
+__HAND_CRICKET_GESTURE_DEBUG__.fixture()   // serialisable JSON record
+__HAND_CRICKET_GESTURE_DEBUG__.download()  // save it (explicit action only)
+__HAND_CRICKET_GESTURE_DEBUG__.clear()     // drop retained frames
+```
+
+A downloaded fixture replays through `fixtureToFrame()` to reproduce the exact
+misread as a deterministic test, so a fix can be driven by what the camera
+actually saw rather than by a silhouette someone guessed at.
+
+Frames live in a small in-memory ring buffer and nowhere else. Nothing is written
+to disk, storage, or the network unless a developer explicitly calls `download()`.
+Production builds contain none of this: the recognizer defaults to an inert
+recorder that the capture module is never imported for, and the bundle is
+asserted to contain no trace of the capture or export code.
+
 ## Diagnosed failure: white balance drift made the hand disappear
 
 Calibrating under one white balance and playing under another made the hand vanish

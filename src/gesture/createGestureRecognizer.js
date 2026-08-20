@@ -14,6 +14,7 @@ import {
 import { buildBackgroundReference, buildSkinCalibration } from './calibration.js';
 import { readMirroredGuideFrame } from './crop.js';
 import { GESTURE_ERROR_CODES, toGestureError } from './errors.js';
+import { DISABLED_DIAGNOSTICS } from './diagnostics.js';
 import { createGeometricPipeline } from './geometricPipeline.js';
 import { createPredictionLoop } from './predictionLoop.js';
 import { createStabilityFilter } from './stabilityFilter.js';
@@ -47,6 +48,8 @@ export function createGestureRecognizer({
   loopFactory = createPredictionLoop,
   stabilityFilter = createStabilityFilter(),
   pipeline = createGeometricPipeline(),
+  // Disabled by default: the caller must opt in, and only the dev build does.
+  diagnosticsRecorder = DISABLED_DIAGNOSTICS,
   frameReader = readMirroredGuideFrame,
   wait = (delay) => new Promise((resolve) => globalThis.setTimeout(resolve, delay)),
   calibrationFrameCount = GEOMETRIC_RECOGNITION_CONFIG.calibrationFrameCount,
@@ -157,7 +160,17 @@ export function createGestureRecognizer({
         if (!frame) {
           return { label: null, confidence: 0 };
         }
-        return pipeline.analyze(frame);
+        const prediction = pipeline.analyze(frame);
+        // No-op unless a development recorder was injected, so production
+        // retains no frames at all.
+        if (diagnosticsRecorder.enabled) {
+          diagnosticsRecorder.record(frame, prediction, {
+            timestamp: clock(),
+            width: GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+            height: GEOMETRIC_RECOGNITION_CONFIG.processingSize,
+          });
+        }
+        return prediction;
       },
       onPrediction(prediction) {
         const filtered = stabilityFilter.push({

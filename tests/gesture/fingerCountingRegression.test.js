@@ -594,3 +594,97 @@ describe('confidence reacts to ambiguous geometry (Step 6)', () => {
     }
   });
 });
+
+describe('finger-counting regression: an over-generating frame is not a confident five', () => {
+  const SIZE = 256;
+  const round = Math.round;
+  const set = (mask, x, y) => {
+    const px = round(x);
+    const py = round(y);
+    if (px >= 0 && px < SIZE && py >= 0 && py < SIZE) mask[py * SIZE + px] = 1;
+  };
+  const disc = (mask, cx, cy, r) => {
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y += 1) {
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x += 1) {
+        if (Math.hypot(x - cx, y - cy) <= r) set(mask, x, y);
+      }
+    }
+  };
+  const stroke = (mask, x0, y0, x1, y1, halfWidth) => {
+    const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0));
+    for (let i = 0; i <= steps; i += 1) {
+      disc(mask, x0 + ((x1 - x0) * i) / steps, y0 + ((y1 - y0) * i) / steps, halfWidth);
+    }
+  };
+
+  // A badly segmented frame: spikes radiating from the palm, as a noisy skin
+  // mask over a patterned background produces. A hand has five fingers, so
+  // eight surviving candidates means the MASK is wrong -- not that the player
+  // is showing eight.
+  function spikyMask() {
+    const mask = new Uint8Array(SIZE * SIZE);
+    const cx = 128;
+    const cy = 150;
+    disc(mask, cx, cy, 38);
+    stroke(mask, cx, cy, cx, SIZE + 40, 24);
+    for (const degrees of [-72, -56, -40, -24, -8, 8, 24, 40]) {
+      const angle = ((degrees - 90) * Math.PI) / 180;
+      stroke(
+        mask,
+        cx + Math.cos(angle) * 20,
+        cy + Math.sin(angle) * 20,
+        cx + Math.cos(angle) * 104,
+        cy + Math.sin(angle) * 104,
+        8,
+      );
+    }
+    return mask;
+  }
+
+  it('REGRESSION flags over-generation instead of silently truncating to five', () => {
+    const geometry = analyzeHandGeometry(
+      findLargestComponent(spikyMask(), SIZE, SIZE),
+      SIZE,
+      SIZE,
+    );
+    // More candidates survive validation than a hand can have.
+    expect(geometry.diagnostics.acceptedBeforeValleyPass).toBeGreaterThan(
+      GEOMETRY_CONFIG.maxFingertips,
+    );
+    expect(geometry.diagnostics.overGenerated).toBe(true);
+    // The count is still capped, but the frame is marked untrustworthy and the
+    // excess is reported rather than discarded in silence.
+    expect(geometry.raisedFingerCount).toBe(GEOMETRY_CONFIG.maxFingertips);
+    expect(
+      geometry.diagnostics.rejectedCandidates.filter(
+        (candidate) => candidate.rejectionReason === 'EXCEEDS_MAX_FINGERTIPS',
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('a well-formed five-finger frame is NOT flagged as over-generating', () => {
+    const mask = new Uint8Array(SIZE * SIZE);
+    const cx = 128;
+    const cy = 150;
+    disc(mask, cx, cy, 38);
+    stroke(mask, cx, cy, cx, SIZE + 40, 24);
+    for (const degrees of [-60, -30, 0, 30, 60]) {
+      const angle = ((degrees - 90) * Math.PI) / 180;
+      stroke(
+        mask,
+        cx + Math.cos(angle) * 20,
+        cy + Math.sin(angle) * 20,
+        cx + Math.cos(angle) * 104,
+        cy + Math.sin(angle) * 104,
+        11,
+      );
+    }
+    const geometry = analyzeHandGeometry(
+      findLargestComponent(mask, SIZE, SIZE),
+      SIZE,
+      SIZE,
+    );
+    expect(geometry.raisedFingerCount).toBe(5);
+    expect(geometry.diagnostics.overGenerated).toBe(false);
+  });
+});

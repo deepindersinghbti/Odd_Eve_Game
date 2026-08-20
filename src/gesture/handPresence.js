@@ -120,6 +120,24 @@ export function rejectHandComponent(component, width, height, overrides = {}) {
   return null;
 }
 
+// How far through the gates a blob got before being rejected, in the order
+// rejectHandComponent applies them. Higher means it looked more like a hand,
+// so its rejection reason is the most useful one to show the player.
+const REJECTION_ORDER = [
+  'NO_COMPONENT',
+  'AREA_TOO_SMALL',
+  'AREA_TOO_LARGE',
+  'NO_WRIST_ENTRY',
+  'TOO_SOLID_FOR_HAND',
+  'FRAGMENTED',
+  'TOO_WIDE_FOR_HAND',
+  'OVERFLOWS_GUIDE_BOX',
+];
+function rejectionRank(reason) {
+  const index = REJECTION_ORDER.indexOf(reason);
+  return index === -1 ? 0 : index;
+}
+
 // Higher is more hand-like. Used only to choose between components that have
 // ALREADY passed rejectHandComponent, so it never rescues an implausible blob.
 function handScore(metrics) {
@@ -161,11 +179,17 @@ export function selectHandComponent(components, width, height, overrides = {}) {
 
   const accepted = candidates.filter((candidate) => !candidate.rejection);
   if (!accepted.length) {
+    // Report the reason from the blob that came CLOSEST to being a hand, not
+    // simply the largest. The player's hand is often not the biggest skin blob
+    // in the box -- that is usually a face -- so reporting the largest blob's
+    // reason explains the wrong object and sends the player the wrong hint.
+    // Ranking by how many gates a blob passed surfaces the near miss instead.
+    const nearest = [...candidates].sort(
+      (first, second) => rejectionRank(second.rejection) - rejectionRank(first.rejection),
+    )[0];
     return {
       component: null,
-      // Report the largest blob's reason: it is the one the player most likely
-      // intended to be their hand, so it is the most useful thing to explain.
-      rejection: candidates[0].rejection,
+      rejection: nearest.rejection,
       candidates,
     };
   }

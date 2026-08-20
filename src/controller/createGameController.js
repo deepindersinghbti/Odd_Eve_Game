@@ -222,15 +222,22 @@ export function createGameController(options = {}) {
 
   function handleAsyncError(operation, error) {
     completeOperation(operation);
-    if (isExpectedDomainError(error)) {
-      publish({
-        presentation: idlePresentation(),
-        controls: { locked: false },
-        error: toPublicError(error),
-      });
-      return;
-    }
-    throw error;
+    // Unlock BEFORE deciding whether to rethrow. This runs inside a scheduled
+    // callback, so an unexpected error escapes to the host with no caller to
+    // catch it -- and the controls were locked when the operation started.
+    // Leaving them locked strands the player with a dead board and no recovery
+    // short of a new match. The error is still rethrown so it stays visible.
+    publish({
+      presentation: idlePresentation(),
+      controls: { locked: false },
+      error: isExpectedDomainError(error)
+        ? toPublicError(error)
+        : {
+            code: CONTROLLER_ERROR_CODES.UNEXPECTED_FAILURE,
+            message: 'Something went wrong resolving that ball. Please try again.',
+          },
+    });
+    if (!isExpectedDomainError(error)) throw error;
   }
 
   function resolveNumberOperation(operation, token) {
