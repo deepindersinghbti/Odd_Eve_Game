@@ -76,6 +76,9 @@ function createFakeRecognizerFactory({ fail = false, needsCalibration = false } 
           calibrationStatus: 'BACKGROUND_REQUIRED',
         });
       }),
+      // Deliberately does not clear `active`: the real recognizer stops itself
+      // on destroy(), so a double that did the same would let the stale-input
+      // test pass without ever reaching the guard in useGestureRecognition.
       destroy: vi.fn(),
       submit(value) {
         return active ? options.onSubmit(value, 'THREE') : false;
