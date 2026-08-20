@@ -1,0 +1,25 @@
+#!/bin/sh
+# Rejects placeholder commit subjects.
+#
+# "Describe what you changed here" is the unedited template some editors
+# pre-fill. It reached the integration branch once already.
+set -eu
+
+subject=$(sed -n '1{/^#/d;p;}' "$1")
+
+# git writes these subjects itself.
+case "$subject" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+case "$subject" in
+  "Describe what you changed here"*|"Initial commit"|"No description provided"*)
+    printf 'commit-msg: "%s" is a placeholder. Say what changed and why.\n' "$subject" >&2
+    exit 1
+    ;;
+esac
+
+if [ "${#subject}" -lt 10 ]; then
+  printf 'commit-msg: subject is too short to describe the change:\n  "%s"\n' "$subject" >&2
+  exit 1
+fi

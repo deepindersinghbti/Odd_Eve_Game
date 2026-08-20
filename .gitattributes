@@ -1,0 +1,4 @@
+# Git hooks are executed by /bin/sh. With core.autocrlf=true a checkout would
+# rewrite them to CRLF, and sh then fails with "bad interpreter: /bin/sh^M".
+# Keep them LF on every platform.
+.githooks/* text eol=lf

@@ -61,3 +61,15 @@ npm run build
 - Play every difficulty.
 - Verify fullscreen, sound, keyboard, reset.
 - Keep production build and source backup on USB.
+
+## Local gates
+
+`npm install` points `core.hooksPath` at `.githooks`, which installs two hooks:
+
+- `pre-commit` runs Prettier and ESLint over the staged files. Prettier reports
+  malformed CSS as a parse error, so brace damage cannot reach a review.
+- `commit-msg` rejects placeholder subjects such as the unedited
+  "Describe what you changed here" template.
+
+Run `npm run verify` for the full format, lint, and unit sweep, and
+`npm run test:e2e` for the Playwright pass.
